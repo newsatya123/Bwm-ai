@@ -1,0 +1,228 @@
+package com.example.engine.actions
+
+import android.content.Context
+import android.content.Intent
+import android.hardware.camera2.CameraAccessException
+import android.hardware.camera2.CameraManager
+import android.media.AudioManager
+import android.net.Uri
+import android.os.BatteryManager
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.provider.AlarmClock
+import android.provider.Settings
+
+data class ToolExecutionResult(
+    val isSuccess: Boolean,
+    val message: String,
+    val data: Map<String, Any> = emptyMap()
+)
+
+class DeviceController(private val context: Context) {
+
+    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+
+    // Flashlight state tracking
+    companion object {
+        var isFlashlightOn = false
+            private set
+    }
+
+    fun toggleFlashlight(turnOn: Boolean): ToolExecutionResult {
+        if (cameraManager == null) {
+            return ToolExecutionResult(false, "Flashlight / CameraManager is not available on this device.")
+        }
+        return try {
+            val cameraId = cameraManager.cameraIdList.firstOrNull { id ->
+                val characteristics = cameraManager.getCameraCharacteristics(id)
+                val hasFlash = characteristics.get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                val facing = characteristics.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)
+                hasFlash && facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
+            } ?: cameraManager.cameraIdList.firstOrNull()
+
+            if (cameraId == null) {
+                ToolExecutionResult(false, "No camera with flash unit detected.")
+            } else {
+                cameraManager.setTorchMode(cameraId, turnOn)
+                isFlashlightOn = turnOn
+                vibrate(50)
+                val statusText = if (turnOn) "Flashlight turned ON" else "Flashlight turned OFF"
+                ToolExecutionResult(true, statusText, mapOf("torchState" to turnOn))
+            }
+        } catch (e: CameraAccessException) {
+            ToolExecutionResult(false, "Flashlight error: ${e.localizedMessage ?: "Camera in use"}")
+        } catch (e: Exception) {
+            ToolExecutionResult(false, "Failed to switch flashlight: ${e.message}")
+        }
+    }
+
+    fun adjustVolume(direction: String, levelPercent: Int? = null): ToolExecutionResult {
+        return try {
+            val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+
+            val newVol: Int = when {
+                levelPercent != null -> {
+                    val clamped = levelPercent.coerceIn(0, 100)
+                    (maxVol * (clamped / 100f)).toInt()
+                }
+                direction.equals("up", ignoreCase = true) || direction.equals("badhao", ignoreCase = true) -> {
+                    (currentVol + (maxVol * 0.15f).toInt().coerceAtLeast(1)).coerceAtMost(maxVol)
+                }
+                direction.equals("down", ignoreCase = true) || direction.equals("ghatao", ignoreCase = true) || direction.equals("kam", ignoreCase = true) -> {
+                    (currentVol - (maxVol * 0.15f).toInt().coerceAtLeast(1)).coerceAtLeast(0)
+                }
+                direction.equals("mute", ignoreCase = true) || direction.equals("silent", ignoreCase = true) -> {
+                    0
+                }
+                direction.equals("max", ignoreCase = true) -> {
+                    maxVol
+                }
+                else -> currentVol
+            }
+
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, newVol, AudioManager.FLAG_SHOW_UI)
+            val percent = if (maxVol > 0) ((newVol.toFloat() / maxVol) * 100).toInt() else 0
+            vibrate(40)
+            ToolExecutionResult(true, "Media volume set to $percent% ($newVol/$maxVol)", mapOf("volumePercent" to percent))
+        } catch (e: Exception) {
+            ToolExecutionResult(false, "Failed to adjust volume: ${e.message}")
+        }
+    }
+
+    fun getBatteryStatus(): ToolExecutionResult {
+        return try {
+            val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+            val level = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+            val isCharging = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_STATUS) == BatteryManager.BATTERY_STATUS_CHARGING
+            } else {
+                false
+            }
+            val statusDesc = if (isCharging) "Battery is at $level% (Charging ⚡)" else "Battery is at $level%"
+            ToolExecutionResult(true, statusDesc, mapOf("level" to level, "isCharging" to isCharging))
+        } catch (e: Exception) {
+            ToolExecutionResult(false, "Could not read battery status: ${e.message}")
+        }
+    }
+
+    fun setTimer(seconds: Int, label: String = "BWM Assistant Timer"): ToolExecutionResult {
+        return try {
+            val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
+                putExtra(AlarmClock.EXTRA_LENGTH, seconds.coerceAtLeast(1))
+                putExtra(AlarmClock.EXTRA_MESSAGE, label)
+                putExtra(AlarmClock.EXTRA_SKIP_UI, false)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            if (intent.resolveActivity(context.packageManager) != null) {
+                context.startActivity(intent)
+                val min = seconds / 60
+                val sec = seconds % 60
+                val timeStr = if (min > 0) "$min minute(s) ${if (sec > 0) "$sec sec" else ""}" else "$sec seconds"
+                ToolExecutionResult(true, "Timer set for $timeStr: '$label'")
+            } else {
+                ToolExecutionResult(false, "No timer or clock app available on this device.")
+            }
+        } catch (e: Exception) {
+            ToolExecutionResult(false, "Failed to set timer: ${e.message}")
+        }
+    }
+
+    fun setAlarm(hour: Int, minute: Int, message: String = "BWM AI Alarm"): ToolExecutionResult {
+        return try {
+            val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
+                putExtra(AlarmClock.EXTRA_HOUR, hour.coerceIn(0, 23))
+                putExtra(AlarmClock.EXTRA_MINUTES, minute.coerceIn(0, 59))
+                putExtra(AlarmClock.EXTRA_MESSAGE, message)
+                putExtra(AlarmClock.EXTRA_SKIP_UI, false)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            if (intent.resolveActivity(context.packageManager) != null) {
+                context.startActivity(intent)
+                val formatted = String.format("%02d:%02d", hour, minute)
+                ToolExecutionResult(true, "Alarm set for $formatted ($message)")
+            } else {
+                ToolExecutionResult(false, "No alarm application found.")
+            }
+        } catch (e: Exception) {
+            ToolExecutionResult(false, "Failed to set alarm: ${e.message}")
+        }
+    }
+
+    fun openSettings(settingType: String): ToolExecutionResult {
+        return try {
+            val action = when (settingType.lowercase().trim()) {
+                "wifi", "wi-fi", "internet" -> Settings.ACTION_WIFI_SETTINGS
+                "bluetooth", "bt" -> Settings.ACTION_BLUETOOTH_SETTINGS
+                "display", "screen", "brightness" -> Settings.ACTION_DISPLAY_SETTINGS
+                "sound", "volume", "audio" -> Settings.ACTION_SOUND_SETTINGS
+                "battery", "power" -> Settings.ACTION_BATTERY_SAVER_SETTINGS
+                "accessibility" -> Settings.ACTION_ACCESSIBILITY_SETTINGS
+                "date", "time" -> Settings.ACTION_DATE_SETTINGS
+                "app_info", "app_details" -> {
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.fromParts("package", context.packageName, null)
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    return ToolExecutionResult(true, "Opening App settings")
+                }
+                else -> Settings.ACTION_SETTINGS
+            }
+
+            val intent = Intent(action).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+            ToolExecutionResult(true, "Opened ${settingType.replaceFirstChar { it.uppercase() }} Settings")
+        } catch (e: Exception) {
+            ToolExecutionResult(false, "Failed to open settings: ${e.message}")
+        }
+    }
+
+    fun openDialer(phoneNumber: String): ToolExecutionResult {
+        return try {
+            val sanitized = phoneNumber.replace(Regex("[^0-9+*#]"), "")
+            val intent = Intent(Intent.ACTION_DIAL).apply {
+                data = Uri.parse("tel:$sanitized")
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+            ToolExecutionResult(true, "Opened phone dialer for $sanitized")
+        } catch (e: Exception) {
+            ToolExecutionResult(false, "Could not open dialer: ${e.message}")
+        }
+    }
+
+    fun openUrl(url: String): ToolExecutionResult {
+        return try {
+            val validUrl = if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                "https://$url"
+            } else url
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(validUrl)).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+            ToolExecutionResult(true, "Opened URL: $validUrl")
+        } catch (e: Exception) {
+            ToolExecutionResult(false, "Failed to open URL: ${e.message}")
+        }
+    }
+
+    fun vibrate(durationMs: Long = 50) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+                vibratorManager?.defaultVibrator?.vibrate(
+                    VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+                vibrator?.vibrate(durationMs)
+            }
+        } catch (_: Exception) {}
+    }
+}
