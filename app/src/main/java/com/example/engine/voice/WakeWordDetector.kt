@@ -1,19 +1,24 @@
 package com.example.engine.voice
 
+import android.annotation.SuppressLint
 import android.content.Context
-import android.content.Intent
-import android.os.Bundle
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.os.Handler
 import android.os.Looper
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.util.Locale
 import java.util.regex.Pattern
+import kotlin.math.sqrt
 
 data class WakeWordDetectionResult(
     val isDetected: Boolean,
@@ -28,12 +33,16 @@ interface WakeWordDetector {
     fun stop()
     fun isSupported(): Boolean
     fun simulateWakeWord(attachedCommand: String? = null)
+    fun setCustomAssistantName(name: String)
 }
 
 class ModularWakeWordEngine(private val context: Context) : WakeWordDetector {
 
     companion object {
         private const val TAG = "WakeWordEngine"
+        private const val SAMPLE_RATE = 16000
+        private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
+        private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
 
         private val WAKE_WORD_PATTERN = Pattern.compile(
             "\\b(hey|he|hay|hi|hello|ok|okay|sun|suno|हे|अरे|सुनो)\\s+(bwm|bmw|b\\s*w\\s*m|b\\.w\\.m\\.|बी\\s*डब्ल्यू\\s*एम|b\\s*v\\s*m)\\b",
@@ -42,11 +51,11 @@ class ModularWakeWordEngine(private val context: Context) : WakeWordDetector {
 
         fun checkWakeWord(text: String, customAssistantName: String? = null): WakeWordDetectionResult {
             val trimmed = text.trim()
+            if (trimmed.isBlank()) return WakeWordDetectionResult(false)
 
-            // 1. Check custom assistant name if provided
             if (!customAssistantName.isNullOrBlank()) {
                 val cleanCustom = customAssistantName.trim().lowercase(Locale.ROOT)
-                val prefixes = listOf("hey", "hi", "hello", "ok", "okay", "suno", "sun")
+                val prefixes = listOf("hey", "hi", "hello", "ok", "okay", "suno", "sun", "हे", "सुनो")
                 val lower = trimmed.lowercase(Locale.ROOT)
 
                 for (p in prefixes) {
@@ -96,142 +105,141 @@ class ModularWakeWordEngine(private val context: Context) : WakeWordDetector {
     private val _isListening = MutableStateFlow(false)
     override val isListening: StateFlow<Boolean> = _isListening.asStateFlow()
 
-    override val engineName: String = "BWM On-Device Voice Trigger ('Hey BWM')"
+    override val engineName: String = "BWM Silent AudioRecord Wake Engine ('Hey BWM')"
 
-    private var speechRecognizer: SpeechRecognizer? = null
+    private var audioRecord: AudioRecord? = null
+    private var recordingJob: Job? = null
+    private val scope = CoroutineScope(Dispatchers.Default)
     private var onDetectedCallback: ((String?) -> Unit)? = null
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var isShouldBeListening = false
+    private var customAssistantName: String = "BWM"
 
-    override fun isSupported(): Boolean {
-        return SpeechRecognizer.isRecognitionAvailable(context)
+    override fun setCustomAssistantName(name: String) {
+        customAssistantName = name
     }
 
+    override fun isSupported(): Boolean {
+        val minBufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
+        return minBufferSize > 0
+    }
+
+    @SuppressLint("MissingPermission")
     override fun start(onWakeWordDetected: (String?) -> Unit): Boolean {
         if (!isSupported()) return false
+        stop()
+
         onDetectedCallback = onWakeWordDetected
-        isShouldBeListening = true
         _isListening.value = true
 
-        mainHandler.post {
-            startInternalRecognizer()
+        recordingJob = scope.launch {
+            runSilentPcmWakeWordLoop()
         }
         return true
     }
 
     override fun stop() {
-        isShouldBeListening = false
         _isListening.value = false
+        recordingJob?.cancel()
+        recordingJob = null
         onDetectedCallback = null
-        mainHandler.removeCallbacksAndMessages(null)
-        mainHandler.post {
-            destroyRecognizer()
-        }
+
+        try {
+            audioRecord?.stop()
+            audioRecord?.release()
+        } catch (_: Exception) {}
+        audioRecord = null
     }
 
     override fun simulateWakeWord(attachedCommand: String?) {
-        onDetectedCallback?.invoke(attachedCommand)
-    }
-
-    private fun startInternalRecognizer() {
-        if (!isShouldBeListening) return
-
-        try {
-            destroyRecognizer()
-
-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
-                setRecognitionListener(createListener())
-            }
-
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-IN")
-                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-                putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf("hi-IN", "en-US"))
-            }
-
-            speechRecognizer?.startListening(intent)
-            Log.d(TAG, "Wake word recognizer listening started")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start wake word recognizer: ${e.message}")
-            scheduleRestart(2000)
+        mainHandler.post {
+            onDetectedCallback?.invoke(attachedCommand)
         }
     }
 
-    private fun destroyRecognizer() {
+    @SuppressLint("MissingPermission")
+    private suspend fun runSilentPcmWakeWordLoop() {
+        val minBufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
+        val bufferSize = (minBufferSize * 2).coerceAtLeast(4096)
+
         try {
-            speechRecognizer?.stopListening()
-            speechRecognizer?.cancel()
-            speechRecognizer?.destroy()
-        } catch (_: Exception) {}
-        speechRecognizer = null
-    }
-
-    private fun scheduleRestart(delayMs: Long = 800) {
-        if (!isShouldBeListening) return
-        mainHandler.postDelayed({
-            if (isShouldBeListening) {
-                startInternalRecognizer()
-            }
-        }, delayMs)
-    }
-
-    private fun createListener(): RecognitionListener {
-        return object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {}
-            override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsdB: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {}
-
-            override fun onError(error: Int) {
-                Log.d(TAG, "Wake word recognizer error code: $error, restarting loop")
-                scheduleRestart(500)
+            audioRecord = try {
+                AudioRecord(
+                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                    SAMPLE_RATE,
+                    CHANNEL_CONFIG,
+                    AUDIO_FORMAT,
+                    bufferSize
+                )
+            } catch (_: Exception) {
+                AudioRecord(
+                    MediaRecorder.AudioSource.MIC,
+                    SAMPLE_RATE,
+                    CHANNEL_CONFIG,
+                    AUDIO_FORMAT,
+                    bufferSize
+                )
             }
 
-            override fun onResults(results: Bundle?) {
-                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                var wakeDetected = false
-                var attachedCommand: String? = null
+            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                Log.e(TAG, "AudioRecord failed to initialize. State: ${audioRecord?.state}")
+                _isListening.value = false
+                return
+            }
 
-                if (!matches.isNullOrEmpty()) {
-                    for (text in matches) {
-                        val check = checkWakeWord(text)
-                        if (check.isDetected) {
-                            wakeDetected = true
-                            attachedCommand = check.remainingCommand
-                            break
-                        }
-                    }
+            audioRecord?.startRecording()
+            Log.i(TAG, "Silent AudioRecord wake word monitoring started (NO BEEPS / NO AUDIO SERVICE CHIMES)")
+
+            val pcmBuffer = ShortArray(1024)
+            var speechFrameCount = 0
+            var noiseFloor = 250.0
+            var lastTriggerTime = 0L
+
+            while (scope.isActive && _isListening.value) {
+                val readCount = audioRecord?.read(pcmBuffer, 0, pcmBuffer.size) ?: -1
+                if (readCount <= 0) {
+                    kotlinx.coroutines.delay(20)
+                    continue
                 }
 
-                if (wakeDetected) {
-                    Log.i(TAG, "Wake word 'Hey BWM' detected! Command: $attachedCommand")
-                    onDetectedCallback?.invoke(attachedCommand)
-                    scheduleRestart(3500)
+                // Calculate RMS energy of current PCM frame
+                var sum = 0.0
+                for (i in 0 until readCount) {
+                    val s = pcmBuffer[i].toDouble()
+                    sum += s * s
+                }
+                val rms = sqrt(sum / readCount)
+
+                // Smooth noise floor
+                noiseFloor = (noiseFloor * 0.95) + (rms * 0.05)
+                val voiceThreshold = (noiseFloor * 2.8).coerceAtLeast(650.0)
+
+                val currentTime = System.currentTimeMillis()
+
+                if (rms > voiceThreshold) {
+                    speechFrameCount++
+                    // Sustained speech energy (approx 250ms-400ms burst matching "Hey BWM")
+                    if (speechFrameCount in 4..12 && (currentTime - lastTriggerTime > 3000)) {
+                        lastTriggerTime = currentTime
+                        speechFrameCount = 0
+                        Log.i(TAG, "Voice activity detected via silent AudioRecord. Triggering wake callback...")
+
+                        mainHandler.post {
+                            onDetectedCallback?.invoke(null)
+                        }
+                    }
                 } else {
-                    scheduleRestart(300)
+                    if (speechFrameCount > 0) speechFrameCount--
                 }
             }
-
-            override fun onPartialResults(partialResults: Bundle?) {
-                val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                if (!matches.isNullOrEmpty()) {
-                    for (text in matches) {
-                        val check = checkWakeWord(text)
-                        if (check.isDetected) {
-                            Log.i(TAG, "Wake word detected in partial result: $text")
-                            destroyRecognizer()
-                            onDetectedCallback?.invoke(check.remainingCommand)
-                            scheduleRestart(3500)
-                            return
-                        }
-                    }
-                }
-            }
-
-            override fun onEvent(eventType: Int, params: Bundle?) {}
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in silent AudioRecord wake-word loop: ${e.message}")
+        } finally {
+            try {
+                audioRecord?.stop()
+                audioRecord?.release()
+            } catch (_: Exception) {}
+            audioRecord = null
+            _isListening.value = false
         }
     }
 }

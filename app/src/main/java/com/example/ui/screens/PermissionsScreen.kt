@@ -183,17 +183,61 @@ fun PermissionsScreen(
             )
 
             // Accessibility Service
+            var showAccessibilityInfoDialog by remember { mutableStateOf(false) }
+
+            if (showAccessibilityInfoDialog) {
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { showAccessibilityInfoDialog = false },
+                    title = { Text("Accessibility Permission", color = TextPrimary, fontWeight = FontWeight.Bold) },
+                    text = {
+                        Column {
+                            Text(
+                                "Why BWM AI needs Accessibility:\n\n" +
+                                "1. 📺 YouTube Automation: Automatically plays first search result, pauses/resumes, and skips to next video on voice command.\n" +
+                                "2. 📱 Phone Navigation: Performs Back, Home, and Notification shade gestures hands-free.\n\n" +
+                                "🔒 Privacy Guarantee: BWM AI never reads personal passwords, private messages, or financial information.\n\n" +
+                                "How to enable:\n" +
+                                "1. Tap 'Open Settings' below.\n" +
+                                "2. Tap 'Installed apps' or 'Downloaded apps'.\n" +
+                                "3. Tap 'BWM AI Screen Automation' and toggle ON.",
+                                color = TextSecondary,
+                                fontSize = 13.sp
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                showAccessibilityInfoDialog = false
+                                BwmAccessibilityService.openAccessibilitySettings(context)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = NeonCyan, contentColor = Color(0xFF001F25))
+                        ) {
+                            Text("Open Settings", fontWeight = FontWeight.Bold)
+                        }
+                    },
+                    dismissButton = {
+                        androidx.compose.material3.TextButton(onClick = { showAccessibilityInfoDialog = false }) {
+                            Text("Cancel", color = TextMuted)
+                        }
+                    },
+                    containerColor = SurfaceNavy,
+                    shape = RoundedCornerShape(16.dp)
+                )
+            }
+
             PermissionCard(
-                title = "Screen Automation & Navigation",
-                description = "Enables BWM AI to execute global phone actions: Back, Home, Quick Settings, and Notifications.",
+                title = "YouTube & Screen Automation",
+                description = "Enables voice controls for YouTube (search, autoplay first video, pause/resume, next) and phone navigation (Back, Home, Notifications).",
                 icon = Icons.Default.AccessibilityNew,
                 isGranted = isAccessibilityActive,
                 actionText = if (isAccessibilityActive) "Configured (Active)" else "Enable in Settings",
                 onAction = {
-                    val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    if (isAccessibilityActive) {
+                        BwmAccessibilityService.openAccessibilitySettings(context)
+                    } else {
+                        showAccessibilityInfoDialog = true
                     }
-                    context.startActivity(intent)
                 }
             )
 

@@ -111,27 +111,19 @@ class SpeechRecognizerManager(
 
             override fun onError(error: Int) {
                 _audioRmsDb.value = 0f
-                if (isContinuousMode && (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                        if (isContinuousMode) {
-                            startListening()
-                        }
-                    }, 400)
-                    return
-                }
-
                 val errorMessage = when (error) {
                     SpeechRecognizer.ERROR_AUDIO -> "Audio recording error"
                     SpeechRecognizer.ERROR_CLIENT -> "Client-side recognition issue"
                     SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Microphone permission denied"
                     SpeechRecognizer.ERROR_NETWORK -> "Network connection error for speech"
                     SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timed out"
-                    SpeechRecognizer.ERROR_NO_MATCH -> "No speech recognized. Speak clearly."
+                    SpeechRecognizer.ERROR_NO_MATCH -> "No speech recognized"
                     SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Speech recognizer is busy"
                     SpeechRecognizer.ERROR_SERVER -> "Server error occurred"
                     SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech detected"
                     else -> "Speech recognition error ($error)"
                 }
+                android.util.Log.d("SpeechRecognizer", "Recognition error ($error): $errorMessage")
                 _recognitionState.value = SpeechRecognitionState.Error(errorMessage, error)
             }
 
@@ -140,7 +132,6 @@ class SpeechRecognizerManager(
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 var recognizedText = matches?.firstOrNull()?.trim() ?: ""
 
-                // Strip wake word prefix if present
                 val wakeCheck = ModularWakeWordEngine.checkWakeWord(recognizedText)
                 if (wakeCheck.isDetected && !wakeCheck.remainingCommand.isNullOrBlank()) {
                     recognizedText = wakeCheck.remainingCommand
@@ -151,13 +142,6 @@ class SpeechRecognizerManager(
                     onResultReceived(recognizedText)
                 } else {
                     _recognitionState.value = SpeechRecognitionState.Idle
-                    if (isContinuousMode) {
-                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                            if (isContinuousMode) {
-                                startListening()
-                            }
-                        }, 400)
-                    }
                 }
             }
 

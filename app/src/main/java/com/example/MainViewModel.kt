@@ -123,9 +123,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             speechRecognizerManager?.recognitionState?.collect { recState ->
                 when (recState) {
                     is SpeechRecognitionState.Listening -> {
-                        _uiState.value = AssistantUiState.LISTENING
+                        _uiState.value = AssistantUiState.CAPTURING_COMMAND
                         _currentStatusMessage.value = if (isContinuousListening.value) {
-                            "Continuous listening active... Speak in Hindi or English"
+                            "Listening for command... Speak in Hindi or English"
                         } else {
                             "Listening... Speak in Hindi or English"
                         }
@@ -137,29 +137,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         _currentInterimText.value = ""
                     }
                     is SpeechRecognitionState.Error -> {
-                        if (isContinuousListening.value && (recState.errorCode == android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT || recState.errorCode == android.speech.SpeechRecognizer.ERROR_NO_MATCH)) {
-                            // Silently continue listening in continuous mode
-                            _currentStatusMessage.value = "Continuous listening active..."
-                        } else {
-                            _uiState.value = AssistantUiState.ERROR
-                            _currentStatusMessage.value = recState.message
-                            viewModelScope.launch {
-                                kotlinx.coroutines.delay(2500)
-                                if (_uiState.value == AssistantUiState.ERROR) {
-                                    if (isContinuousListening.value) {
-                                        startVoiceListening()
-                                    } else {
-                                        _uiState.value = AssistantUiState.IDLE
-                                        _currentStatusMessage.value = "Ready for commands"
-                                        startWakeWordEngineIfEnabled()
-                                    }
-                                }
-                            }
-                        }
+                        _currentInterimText.value = ""
+                        _uiState.value = AssistantUiState.IDLE
+                        _currentStatusMessage.value = "Listening for '${assistantName.value}' or tap microphone"
+                        startWakeWordEngineIfEnabled()
                     }
                     is SpeechRecognitionState.Idle -> {
-                        if (_uiState.value == AssistantUiState.LISTENING && !isContinuousListening.value) {
+                        if (_uiState.value == AssistantUiState.CAPTURING_COMMAND) {
                             _uiState.value = AssistantUiState.IDLE
+                            startWakeWordEngineIfEnabled()
                         }
                     }
                     else -> {}
@@ -182,7 +168,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun startWakeWordEngineIfEnabled() {
-        if (_isWakeWordEnabled.value && _uiState.value == AssistantUiState.IDLE) {
+        if (_isWakeWordEnabled.value && (_uiState.value == AssistantUiState.IDLE || _uiState.value == AssistantUiState.LISTENING_FOR_WAKE_WORD)) {
+            _uiState.value = AssistantUiState.LISTENING_FOR_WAKE_WORD
+            wakeWordEngine.setCustomAssistantName(assistantName.value)
             wakeWordEngine.start { attachedCommand ->
                 viewModelScope.launch(Dispatchers.Main) {
                     ttsManager.stop()
@@ -203,6 +191,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _currentStatusMessage.value = "Wake-word enabled ('Hey ${assistantName.value}')"
         } else {
             wakeWordEngine.stop()
+            _uiState.value = AssistantUiState.IDLE
             _currentStatusMessage.value = "Wake-word disabled"
         }
     }
@@ -212,7 +201,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun toggleVoiceListening() {
-        if (_uiState.value == AssistantUiState.LISTENING) {
+        if (_uiState.value.isListening) {
             stopVoiceListening()
         } else {
             startVoiceListening()
@@ -222,6 +211,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun startVoiceListening() {
         ttsManager.stop()
         wakeWordEngine.stop()
+        _uiState.value = AssistantUiState.CAPTURING_COMMAND
         _currentInterimText.value = ""
         speechRecognizerManager?.isContinuousMode = isContinuousListening.value
         speechRecognizerManager?.currentLanguageCode = selectedLanguage.value
@@ -436,6 +426,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             is ToolActionRequest.OpenUrl -> {
                 val res = deviceController.openUrl(action.url)
                 dao.insertActionLog(ActionLogItem(toolName = "OpenUrl", parameters = action.url, result = res.message, isSuccess = res.isSuccess))
+                Triple(res.isSuccess, res.message, res.message)
+            }
+            is ToolActionRequest.YouTubeSearch -> {
+                val res = deviceController.openYouTube(action.query, action.autoPlayFirst)
+                dao.insertActionLog(ActionLogItem(toolName = "YouTubeSearch", parameters = "query=${action.query}, autoPlay=${action.autoPlayFirst}", result = res.message, isSuccess = res.isSuccess))
+                Triple(res.isSuccess, res.message, res.message)
+            }
+            is ToolActionRequest.YouTubeControl -> {
+                val res = deviceController.controlYouTube(action.action)
+                dao.insertActionLog(ActionLogItem(toolName = "YouTubeControl", parameters = action.action, result = res.message, isSuccess = res.isSuccess))
                 Triple(res.isSuccess, res.message, res.message)
             }
             is ToolActionRequest.DeviceNavigation -> {

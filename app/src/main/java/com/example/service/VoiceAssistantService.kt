@@ -153,15 +153,13 @@ class VoiceAssistantService : Service() {
         if (_isListeningPaused.value) return
 
         val customName = settingsManager?.assistantName?.value ?: "BWM AI"
+        wakeWordEngine?.setCustomAssistantName(customName)
         wakeWordEngine?.start { attachedCommand ->
             if (!attachedCommand.isNullOrBlank()) {
                 handleBackgroundCommand(attachedCommand)
             } else {
-                ttsManager?.speak("Ji, sun raha hoon...")
-                serviceScope.launch {
-                    kotlinx.coroutines.delay(600)
-                    triggerImmediateVoiceCapture()
-                }
+                // Instantly capture command silently without any beep or audio disruption
+                triggerImmediateVoiceCapture()
             }
         }
     }
@@ -175,7 +173,10 @@ class VoiceAssistantService : Service() {
 
     private fun handleBackgroundCommand(command: String) {
         val query = command.trim()
-        if (query.isBlank()) return
+        if (query.isBlank()) {
+            startBackgroundListening()
+            return
+        }
 
         serviceScope.launch {
             _lastExecutedStatus.value = "Processing: \"$query\"..."
@@ -200,8 +201,8 @@ class VoiceAssistantService : Service() {
                 ttsManager?.speak(response.responseText)
             }
 
-            // Resume background listening loop after speaking finishes
-            kotlinx.coroutines.delay(1500)
+            // Resume silent background listening loop after speaking finishes
+            kotlinx.coroutines.delay(1200)
             if (!_isListeningPaused.value && _isServiceRunning.value) {
                 startBackgroundListening()
             }
@@ -225,6 +226,14 @@ class VoiceAssistantService : Service() {
             is ToolActionRequest.LaunchApp -> {
                 val res = appLauncher?.launchAppByName(action.appName)
                 res?.message ?: "Opening ${action.appName}"
+            }
+            is ToolActionRequest.YouTubeSearch -> {
+                val res = deviceController?.openYouTube(action.query, action.autoPlayFirst)
+                res?.message ?: "Searching YouTube for ${action.query}"
+            }
+            is ToolActionRequest.YouTubeControl -> {
+                val res = deviceController?.controlYouTube(action.action)
+                res?.message ?: "YouTube control ${action.action}"
             }
             is ToolActionRequest.SetTimer -> {
                 val res = deviceController?.setTimer(action.seconds, action.label)
@@ -318,6 +327,7 @@ class VoiceAssistantService : Service() {
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentIntent(openAppPendingIntent)
             .setOngoing(true)
+            .setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .addAction(0, "🎤 Speak", triggerVoicePending)
             .addAction(0, "⚡ Torch", toggleTorchPending)
@@ -334,6 +344,8 @@ class VoiceAssistantService : Service() {
             ).apply {
                 description = getString(R.string.notification_channel_description)
                 setShowBadge(false)
+                setSound(null, null)
+                enableVibration(false)
             }
             val manager = getSystemService(NotificationManager::class.java)
             manager?.createNotificationChannel(channel)

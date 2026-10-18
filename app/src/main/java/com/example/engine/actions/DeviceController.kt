@@ -210,6 +210,100 @@ class DeviceController(private val context: Context) {
         }
     }
 
+    fun openYouTube(query: String? = null, autoPlayFirst: Boolean = false): ToolExecutionResult {
+        return try {
+            val targetUrl = if (!query.isNullOrBlank()) {
+                val encoded = java.net.URLEncoder.encode(query.trim(), "UTF-8")
+                "https://www.youtube.com/results?search_query=$encoded"
+            } else {
+                "https://www.youtube.com"
+            }
+
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)).apply {
+                setPackage("com.google.android.youtube")
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+
+            val canResolve = context.packageManager.resolveActivity(intent, 0) != null
+            if (canResolve) {
+                context.startActivity(intent)
+            } else {
+                val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(webIntent)
+            }
+
+            try {
+                com.example.service.VoiceAssistantService.start(context)
+            } catch (_: Exception) {}
+
+            if (autoPlayFirst) {
+                com.example.service.BwmAccessibilityService.scheduleFirstVideoClick(2000)
+            }
+
+            val message = if (!query.isNullOrBlank()) {
+                "YouTube par \"$query\" search kiya ja raha hai${if (autoPlayFirst) " aur video play ho rahi hai" else ""}..."
+            } else {
+                "YouTube khol raha hoon..."
+            }
+            ToolExecutionResult(true, message, mapOf("query" to (query ?: "")))
+        } catch (e: Exception) {
+            ToolExecutionResult(false, "Failed to open YouTube: ${e.message}")
+        }
+    }
+
+    fun controlYouTube(action: String): ToolExecutionResult {
+        return try {
+            when (action.lowercase()) {
+                "pause" -> {
+                    val clicked = com.example.service.BwmAccessibilityService.clickPlayPause()
+                    if (clicked) {
+                        ToolExecutionResult(true, "YouTube video pause kar di hai.")
+                    } else {
+                        sendMediaKeyEvent(android.view.KeyEvent.KEYCODE_MEDIA_PAUSE)
+                        ToolExecutionResult(true, "Sent pause command.")
+                    }
+                }
+                "play", "resume", "chalao" -> {
+                    val clicked = com.example.service.BwmAccessibilityService.clickPlayPause()
+                    if (clicked) {
+                        ToolExecutionResult(true, "YouTube video resume kar di hai.")
+                    } else {
+                        sendMediaKeyEvent(android.view.KeyEvent.KEYCODE_MEDIA_PLAY)
+                        ToolExecutionResult(true, "Sent play/resume command.")
+                    }
+                }
+                "next", "agla" -> {
+                    val clicked = com.example.service.BwmAccessibilityService.clickNextVideo()
+                    if (clicked) {
+                        ToolExecutionResult(true, "Next video play kar rahe hain.")
+                    } else {
+                        sendMediaKeyEvent(android.view.KeyEvent.KEYCODE_MEDIA_NEXT)
+                        ToolExecutionResult(true, "Sent next video command.")
+                    }
+                }
+                "close", "band" -> {
+                    com.example.service.BwmAccessibilityService.performGlobal("home")
+                    ToolExecutionResult(true, "YouTube band kar diya hai.")
+                }
+                else -> ToolExecutionResult(false, "Unknown YouTube command '$action'")
+            }
+        } catch (e: Exception) {
+            ToolExecutionResult(false, "YouTube control error: ${e.message}")
+        }
+    }
+
+    private fun sendMediaKeyEvent(keyCode: Int) {
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val eventDown = android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, keyCode)
+            val eventUp = android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, keyCode)
+            am.dispatchMediaKeyEvent(eventDown)
+            am.dispatchMediaKeyEvent(eventUp)
+        } catch (_: Exception) {}
+    }
+
     fun vibrate(durationMs: Long = 50) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

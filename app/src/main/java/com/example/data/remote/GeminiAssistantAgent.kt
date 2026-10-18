@@ -26,6 +26,8 @@ sealed class ToolActionRequest {
     data class DialPhone(val phoneNumber: String, val contactName: String? = null) : ToolActionRequest()
     data class OpenUrl(val url: String) : ToolActionRequest()
     data class DeviceNavigation(val action: String) : ToolActionRequest()
+    data class YouTubeSearch(val query: String, val autoPlayFirst: Boolean = false) : ToolActionRequest()
+    data class YouTubeControl(val action: String) : ToolActionRequest()
 }
 
 data class AgentResponse(
@@ -230,6 +232,23 @@ class GeminiAssistantAgent {
             listOf("action")
         ))
 
+        functionDeclarations.put(createTool(
+            "youtube_search",
+            "Search YouTube for videos, music, tutorials, or topics and optionally autoplay the first video",
+            listOf(
+                "query" to "Search query topic or song name",
+                "auto_play" to "Whether to automatically click and play the first video result (true/false)"
+            ),
+            listOf("query")
+        ))
+
+        functionDeclarations.put(createTool(
+            "youtube_control",
+            "Control YouTube playback: pause, play, resume, next, or close",
+            listOf("action" to "pause, play, resume, next, or close"),
+            listOf("action")
+        ))
+
         toolsContainer.put("functionDeclarations", functionDeclarations)
         toolsArray.put(toolsContainer)
         root.put("tools", toolsArray)
@@ -351,6 +370,17 @@ class GeminiAssistantAgent {
                         val action = args.optString("action", "back")
                         toolActions.add(ToolActionRequest.DeviceNavigation(action))
                         if (textResponse.isBlank()) textResponse = "Navigating $action..."
+                    }
+                    "youtube_search" -> {
+                        val query = args.optString("query", "")
+                        val autoPlay = args.optBoolean("auto_play", false)
+                        toolActions.add(ToolActionRequest.YouTubeSearch(query, autoPlay))
+                        if (textResponse.isBlank()) textResponse = if (autoPlay) "Searching YouTube for $query and playing..." else "Searching YouTube for $query..."
+                    }
+                    "youtube_control" -> {
+                        val action = args.optString("action", "pause")
+                        toolActions.add(ToolActionRequest.YouTubeControl(action))
+                        if (textResponse.isBlank()) textResponse = "Executing YouTube $action command..."
                     }
                 }
             }
@@ -532,9 +562,53 @@ class GeminiAssistantAgent {
             }
         }
 
-        // 10. Open App (WhatsApp, YouTube, Camera, Calculator, Chrome, Maps, Instagram, etc.)
+        // 10. YouTube Controls & Searches
+        if (p.contains("youtube") || p.contains("video")) {
+            if (p.contains("next") || p.contains("agla")) {
+                return AgentResponse("Playing next video on YouTube...", ToolActionRequest.YouTubeControl("next"))
+            }
+            if (p.contains("pause") || p.contains("roko") || p.contains("ruk jao")) {
+                return AgentResponse("YouTube video pause kar di hai.", ToolActionRequest.YouTubeControl("pause"))
+            }
+            if (p.contains("resume") || p.contains("unpause") || (p.contains("play") && !p.contains("search") && !p.contains("song"))) {
+                return AgentResponse("YouTube video resume kar di hai.", ToolActionRequest.YouTubeControl("play"))
+            }
+            if (p.contains("band") || p.contains("close") || p.contains("exit")) {
+                return AgentResponse("YouTube band kar diya hai.", ToolActionRequest.YouTubeControl("close"))
+            }
+        }
+
+        val isExplicitSearch = p.contains("search") || p.contains("khojo") || p.contains("dhoondo")
+        val isExplicitPlay = p.contains("chalao") || p.contains("play") || p.contains("sunao") || p.contains("lagao")
+        if (p.contains("youtube") || (isExplicitSearch && (p.contains("tutorial") || p.contains("song") || p.contains("video") || p.contains("minecraft") || p.contains("coding"))) || (isExplicitPlay && (p.contains("tutorial") || p.contains("song") || p.contains("video")))) {
+            val autoPlay = isExplicitPlay
+            var cleanQuery = p
+                .replace(Regex("(?i)\\b(hey|suno|ok|okay)\\s*(bwm|bmw)?\\b"), "")
+                .replace(Regex("(?i)\\b(youtube\\s*par|on\\s*youtube|in\\s*youtube|youtube)\\b"), "")
+                .replace(Regex("(?i)\\b(search\\s*karo|search\\s*kijiye|search|khojo|dhoondo)\\b"), "")
+                .replace(Regex("(?i)\\b(chalao|play\\s*karo|play|lagao|sunao|kholo|open)\\b"), "")
+                .replace(Regex("(?i)\\b(please|mujhe|zara|karo|bhi)\\b"), "")
+                .replace(Regex("\\s+"), " ")
+                .trim()
+
+            if (cleanQuery.isNotBlank()) {
+                val resp = if (autoPlay) {
+                    "YouTube par \"$cleanQuery\" search karke play kar raha hoon..."
+                } else {
+                    "YouTube par \"$cleanQuery\" search kar raha hoon..."
+                }
+                return AgentResponse(
+                    responseText = resp,
+                    toolAction = ToolActionRequest.YouTubeSearch(cleanQuery, autoPlayFirst = autoPlay)
+                )
+            } else if (p.contains("youtube")) {
+                return AgentResponse("YouTube khol raha hoon...", ToolActionRequest.LaunchApp("youtube"))
+            }
+        }
+
+        // 11. Open App (WhatsApp, YouTube, Camera, Calculator, Chrome, Maps, Instagram, etc.)
         val appMatches = listOf(
-            "whatsapp", "youtube", "camera", "calculator", "chrome",
+            "whatsapp", "camera", "calculator", "chrome",
             "maps", "photos", "gallery", "contacts", "clock", "calendar",
             "instagram", "facebook", "telegram", "spotify", "gmail", "settings"
         )

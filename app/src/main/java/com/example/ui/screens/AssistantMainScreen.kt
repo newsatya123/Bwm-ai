@@ -307,7 +307,8 @@ fun AssistantMainScreen(
 
             Surface(
                 color = when (uiState) {
-                    AssistantUiState.LISTENING -> RadiantEmerald.copy(alpha = 0.15f)
+                    AssistantUiState.CAPTURING_COMMAND, AssistantUiState.LISTENING -> RadiantEmerald.copy(alpha = 0.15f)
+                    AssistantUiState.LISTENING_FOR_WAKE_WORD -> NeonCyan.copy(alpha = 0.12f)
                     AssistantUiState.PROCESSING -> ElectricViolet.copy(alpha = 0.15f)
                     AssistantUiState.EXECUTING -> WarningAmber.copy(alpha = 0.15f)
                     AssistantUiState.ERROR -> ErrorRed.copy(alpha = 0.15f)
@@ -317,7 +318,8 @@ fun AssistantMainScreen(
                 border = androidx.compose.foundation.BorderStroke(
                     1.dp,
                     when (uiState) {
-                        AssistantUiState.LISTENING -> RadiantEmerald
+                        AssistantUiState.CAPTURING_COMMAND, AssistantUiState.LISTENING -> RadiantEmerald
+                        AssistantUiState.LISTENING_FOR_WAKE_WORD -> NeonCyan.copy(alpha = 0.5f)
                         AssistantUiState.PROCESSING -> ElectricViolet
                         AssistantUiState.EXECUTING -> WarningAmber
                         AssistantUiState.ERROR -> ErrorRed
@@ -330,7 +332,8 @@ fun AssistantMainScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     val statusDotColor = when (uiState) {
-                        AssistantUiState.LISTENING -> RadiantEmerald
+                        AssistantUiState.CAPTURING_COMMAND, AssistantUiState.LISTENING -> RadiantEmerald
+                        AssistantUiState.LISTENING_FOR_WAKE_WORD -> NeonCyan
                         AssistantUiState.PROCESSING -> ElectricViolet
                         AssistantUiState.EXECUTING -> WarningAmber
                         AssistantUiState.SPEAKING -> NeonCyan
@@ -460,7 +463,7 @@ fun AssistantMainScreen(
             ) {
                 FloatingActionButton(
                     onClick = { viewModel.toggleVoiceListening() },
-                    containerColor = if (uiState == AssistantUiState.LISTENING) RadiantEmerald else NeonCyan,
+                    containerColor = if (uiState.isListening) RadiantEmerald else NeonCyan,
                     contentColor = Color(0xFF001F25),
                     elevation = FloatingActionButtonDefaults.elevation(4.dp),
                     shape = CircleShape,
@@ -469,7 +472,7 @@ fun AssistantMainScreen(
                         .testTag("voice_input_fab")
                 ) {
                     Icon(
-                        imageVector = if (uiState == AssistantUiState.LISTENING) Icons.Default.MicOff else Icons.Default.Mic,
+                        imageVector = if (uiState.isListening) Icons.Default.MicOff else Icons.Default.Mic,
                         contentDescription = "Microphone Button",
                         modifier = Modifier.size(26.dp)
                     )

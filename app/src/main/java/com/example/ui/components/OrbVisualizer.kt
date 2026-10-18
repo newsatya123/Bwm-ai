@@ -76,7 +76,8 @@ fun OrbVisualizer(
     )
 
     val (primaryColor, secondaryColor) = when (state) {
-        AssistantUiState.LISTENING -> RadiantEmerald to logoTheme.primaryColor
+        AssistantUiState.CAPTURING_COMMAND, AssistantUiState.LISTENING -> RadiantEmerald to logoTheme.primaryColor
+        AssistantUiState.LISTENING_FOR_WAKE_WORD -> logoTheme.primaryColor to logoTheme.secondaryColor
         AssistantUiState.PROCESSING -> ElectricViolet to Color(0xFFF72585)
         AssistantUiState.EXECUTING -> OrbExecutingPulse to Color(0xFFFF9E00)
         AssistantUiState.SPEAKING -> logoTheme.primaryColor to logoTheme.secondaryColor
@@ -99,13 +100,13 @@ fun OrbVisualizer(
             val center = Offset(size.toPx() / 2f, size.toPx() / 2f)
             val baseRadius = (size.toPx() / 2f) * 0.65f
 
-            val audioBoost = if (state == AssistantUiState.LISTENING || state == AssistantUiState.SPEAKING) {
+            val audioBoost = if (state.isListening || state == AssistantUiState.SPEAKING) {
                 rmsDb * 0.45f
             } else 0f
 
             val currentRadius = baseRadius * (if (state == AssistantUiState.IDLE) idlePulse else (1.0f + audioBoost))
 
-            if (state == AssistantUiState.LISTENING || state == AssistantUiState.SPEAKING) {
+            if (state == AssistantUiState.CAPTURING_COMMAND || state == AssistantUiState.LISTENING || state == AssistantUiState.SPEAKING) {
                 val rippleRadius = currentRadius * rippleScale
                 val rippleAlpha = (1f - (rippleScale - 1.0f) / 0.35f).coerceIn(0f, 1f) * 0.5f
                 drawCircle(
