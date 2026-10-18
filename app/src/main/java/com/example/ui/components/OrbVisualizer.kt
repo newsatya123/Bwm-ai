@@ -40,6 +40,7 @@ fun OrbVisualizer(
     rmsDb: Float,
     modifier: Modifier = Modifier,
     size: Dp = 160.dp,
+    logoTheme: com.example.data.local.AssistantLogoTheme = com.example.data.local.AssistantLogoTheme.NEON_CYAN,
     onClick: () -> Unit = {}
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "orbTransition")
@@ -75,12 +76,12 @@ fun OrbVisualizer(
     )
 
     val (primaryColor, secondaryColor) = when (state) {
-        AssistantUiState.LISTENING -> RadiantEmerald to NeonCyan
+        AssistantUiState.LISTENING -> RadiantEmerald to logoTheme.primaryColor
         AssistantUiState.PROCESSING -> ElectricViolet to Color(0xFFF72585)
         AssistantUiState.EXECUTING -> OrbExecutingPulse to Color(0xFFFF9E00)
-        AssistantUiState.SPEAKING -> NeonCyan to ElectricViolet
+        AssistantUiState.SPEAKING -> logoTheme.primaryColor to logoTheme.secondaryColor
         AssistantUiState.ERROR -> ErrorRed to Color(0xFFBA1839)
-        AssistantUiState.IDLE -> NeonCyan to ElectricViolet
+        AssistantUiState.IDLE -> logoTheme.primaryColor to logoTheme.secondaryColor
     }
 
     Box(

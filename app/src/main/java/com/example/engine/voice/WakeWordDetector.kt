@@ -40,8 +40,28 @@ class ModularWakeWordEngine(private val context: Context) : WakeWordDetector {
             Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE
         )
 
-        fun checkWakeWord(text: String): WakeWordDetectionResult {
+        fun checkWakeWord(text: String, customAssistantName: String? = null): WakeWordDetectionResult {
             val trimmed = text.trim()
+
+            // 1. Check custom assistant name if provided
+            if (!customAssistantName.isNullOrBlank()) {
+                val cleanCustom = customAssistantName.trim().lowercase(Locale.ROOT)
+                val prefixes = listOf("hey", "hi", "hello", "ok", "okay", "suno", "sun")
+                val lower = trimmed.lowercase(Locale.ROOT)
+
+                for (p in prefixes) {
+                    val trigger = "$p $cleanCustom"
+                    if (lower.startsWith(trigger)) {
+                        val remaining = lower.removePrefix(trigger).trim().removePrefix(",").trim()
+                        return WakeWordDetectionResult(
+                            isDetected = true,
+                            matchedPhrase = trigger,
+                            remainingCommand = if (remaining.isNotBlank()) remaining else null
+                        )
+                    }
+                }
+            }
+
             val matcher = WAKE_WORD_PATTERN.matcher(trimmed)
             if (matcher.find()) {
                 val matched = matcher.group()

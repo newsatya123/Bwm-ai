@@ -109,6 +109,9 @@ fun AssistantMainScreen(
     val isServiceRunning by VoiceAssistantService.isServiceRunning.collectAsState()
     val isWakeWordEnabled by viewModel.isWakeWordEnabled.collectAsState()
     val pendingConfirmation by viewModel.pendingConfirmation.collectAsState()
+    val assistantName by viewModel.assistantName.collectAsState()
+    val logoTheme by viewModel.logoTheme.collectAsState()
+    val isContinuousListening by viewModel.isContinuousListening.collectAsState()
 
     var textInput by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -161,10 +164,10 @@ fun AssistantMainScreen(
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "BWM AI",
+                        text = assistantName,
                         fontSize = 22.sp,
                         fontWeight = FontWeight.Black,
-                        color = NeonCyan
+                        color = logoTheme.primaryColor
                     )
                     Spacer(modifier = Modifier.width(8.dp))
 
@@ -180,8 +183,30 @@ fun AssistantMainScreen(
                             .testTag("wake_word_top_badge")
                     ) {
                         Text(
-                            text = if (isWakeWordEnabled) "⚡ HEY BWM ON" else "⚡ WAKE OFF",
+                            text = if (isWakeWordEnabled) "⚡ Hey $assistantName" else "⚡ Wake OFF",
                             color = if (isWakeWordEnabled) RadiantEmerald else TextSecondary,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(6.dp))
+
+                    Surface(
+                        color = if (isContinuousListening) RadiantEmerald.copy(alpha = 0.2f) else SurfaceVariantNavy,
+                        shape = RoundedCornerShape(8.dp),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (isContinuousListening) RadiantEmerald else CardBorderNavy
+                        ),
+                        modifier = Modifier
+                            .clickable { viewModel.setContinuousListening(!isContinuousListening) }
+                            .testTag("continuous_listening_top_badge")
+                    ) {
+                        Text(
+                            text = if (isContinuousListening) "🔄 Continuous" else "Single Tap",
+                            color = if (isContinuousListening) RadiantEmerald else TextSecondary,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -268,6 +293,7 @@ fun AssistantMainScreen(
                 state = uiState,
                 rmsDb = audioRmsDb,
                 size = 140.dp,
+                logoTheme = logoTheme,
                 onClick = {
                     if (isSpeaking) {
                         viewModel.stopSpeaking()

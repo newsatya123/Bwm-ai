@@ -110,8 +110,14 @@ class AppLauncher(private val context: Context) {
             if (launchIntent != null) {
                 launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(launchIntent)
+
+                // Start background foreground service so assistant keeps listening even when YouTube/other app is open
+                try {
+                    com.example.service.VoiceAssistantService.start(context)
+                } catch (_: Exception) {}
+
                 val displayName = appName ?: packageName
-                ToolExecutionResult(true, "Launching $displayName...", mapOf("packageName" to packageName))
+                ToolExecutionResult(true, "Launching $displayName (BWM Assistant active in background)...", mapOf("packageName" to packageName))
             } else {
                 ToolExecutionResult(false, "Cannot launch package '$packageName' (no launcher activity).")
             }

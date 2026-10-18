@@ -30,10 +30,25 @@ sealed class ToolActionRequest {
 
 data class AgentResponse(
     val responseText: String,
-    val toolAction: ToolActionRequest? = null,
+    val toolActions: List<ToolActionRequest> = emptyList(),
     val requiresConfirmation: Boolean = false,
     val confirmationPrompt: String? = null
-)
+) {
+    // Backwards compatibility constructor & property
+    constructor(
+        responseText: String,
+        toolAction: ToolActionRequest?,
+        requiresConfirmation: Boolean = false,
+        confirmationPrompt: String? = null
+    ) : this(
+        responseText = responseText,
+        toolActions = if (toolAction != null) listOf(toolAction) else emptyList(),
+        requiresConfirmation = requiresConfirmation,
+        confirmationPrompt = confirmationPrompt
+    )
+
+    val toolAction: ToolActionRequest? get() = toolActions.firstOrNull()
+}
 
 class GeminiAssistantAgent {
 
@@ -261,7 +276,7 @@ class GeminiAssistantAgent {
         val parts = content.optJSONArray("parts") ?: return parseWithOfflineNlp(originalPrompt)
 
         var textResponse = ""
-        var toolAction: ToolActionRequest? = null
+        val toolActions = mutableListOf<ToolActionRequest>()
         var requiresConfirmation = false
         var confirmationPrompt: String? = null
 
@@ -278,83 +293,112 @@ class GeminiAssistantAgent {
                 when (toolName) {
                     "launch_app" -> {
                         val appName = args.optString("app_name", "")
-                        toolAction = ToolActionRequest.LaunchApp(appName)
+                        toolActions.add(ToolActionRequest.LaunchApp(appName))
                         if (textResponse.isBlank()) textResponse = "Opening $appName..."
                     }
                     "toggle_flashlight" -> {
                         val enable = args.optBoolean("enable", true)
-                        toolAction = ToolActionRequest.ToggleFlashlight(enable)
+                        toolActions.add(ToolActionRequest.ToggleFlashlight(enable))
                         if (textResponse.isBlank()) textResponse = if (enable) "Turning on flashlight" else "Turning off flashlight"
                     }
                     "adjust_volume" -> {
                         val dir = args.optString("direction", "up")
                         val level = if (args.has("level_percent")) args.getInt("level_percent") else null
-                        toolAction = ToolActionRequest.AdjustVolume(dir, level)
+                        toolActions.add(ToolActionRequest.AdjustVolume(dir, level))
                         if (textResponse.isBlank()) textResponse = "Adjusting volume..."
                     }
                     "get_battery_status" -> {
-                        toolAction = ToolActionRequest.GetBatteryStatus
+                        toolActions.add(ToolActionRequest.GetBatteryStatus)
                         if (textResponse.isBlank()) textResponse = "Checking battery level..."
                     }
                     "set_timer" -> {
                         val seconds = args.optInt("seconds", 60)
                         val label = args.optString("label", "Timer")
-                        toolAction = ToolActionRequest.SetTimer(seconds, label)
+                        toolActions.add(ToolActionRequest.SetTimer(seconds, label))
                         if (textResponse.isBlank()) textResponse = "Setting timer for ${seconds / 60} minutes..."
                     }
                     "set_alarm" -> {
                         val hour = args.optInt("hour", 7)
                         val minute = args.optInt("minute", 0)
                         val message = args.optString("message", "Alarm")
-                        toolAction = ToolActionRequest.SetAlarm(hour, minute, message)
+                        toolActions.add(ToolActionRequest.SetAlarm(hour, minute, message))
                         if (textResponse.isBlank()) textResponse = "Setting alarm for $hour:$minute..."
                     }
                     "open_settings" -> {
                         val settingType = args.optString("setting_type", "general")
-                        toolAction = ToolActionRequest.OpenSettings(settingType)
+                        toolActions.add(ToolActionRequest.OpenSettings(settingType))
                         if (textResponse.isBlank()) textResponse = "Opening $settingType settings..."
                     }
                     "save_note" -> {
                         val title = args.optString("title", "Voice Note")
                         val noteContent = args.optString("content", "")
-                        toolAction = ToolActionRequest.SaveNote(title, noteContent)
+                        toolActions.add(ToolActionRequest.SaveNote(title, noteContent))
                         if (textResponse.isBlank()) textResponse = "Saving note: $title"
                     }
                     "get_notes" -> {
-                        toolAction = ToolActionRequest.GetNotes
+                        toolActions.add(ToolActionRequest.GetNotes)
                         if (textResponse.isBlank()) textResponse = "Fetching your saved notes..."
                     }
                     "dial_phone" -> {
                         val phone = args.optString("phone_number", "")
                         val name = args.optString("contact_name", "")
-                        toolAction = ToolActionRequest.DialPhone(phone, name)
+                        toolActions.add(ToolActionRequest.DialPhone(phone, name))
                         requiresConfirmation = true
                         confirmationPrompt = "Do you want to dial ${if (name.isNotEmpty()) name else phone}?"
                         if (textResponse.isBlank()) textResponse = "Preparing to dial $phone..."
                     }
                     "device_navigation" -> {
                         val action = args.optString("action", "back")
-                        toolAction = ToolActionRequest.DeviceNavigation(action)
+                        toolActions.add(ToolActionRequest.DeviceNavigation(action))
                         if (textResponse.isBlank()) textResponse = "Navigating $action..."
                     }
                 }
             }
         }
 
-        if (textResponse.isBlank() && toolAction == null) {
+        if (textResponse.isBlank() && toolActions.isEmpty()) {
             textResponse = "Main aapki kya madad kar sakta hoon? (How can I assist you?)"
         }
 
         return AgentResponse(
             responseText = textResponse.trim(),
-            toolAction = toolAction,
+            toolActions = toolActions,
             requiresConfirmation = requiresConfirmation,
             confirmationPrompt = confirmationPrompt
         )
     }
 
-    // High performance local NLP rule engine for Hindi/Hinglish/English
+    // Multi-tasking NLP engine supporting compound commands (e.g. "turn on torch and open youtube")
     fun parseWithOfflineNlp(prompt: String): AgentResponse {
+        val clean = prompt.trim()
+        val splitRegex = Regex("(?i)\\s+(and|aur|then|fir|phir|ke baad|baad me|after that)\\s+|\\s*[,;]\\s+")
+        val clauses = clean.split(splitRegex).map { it.trim() }.filter { it.length > 2 }
+
+        if (clauses.size > 1) {
+            val combinedActions = mutableListOf<ToolActionRequest>()
+            val speechParts = mutableListOf<String>()
+
+            for (clause in clauses) {
+                val singleResp = parseSingleCommandOffline(clause)
+                if (singleResp.toolActions.isNotEmpty()) {
+                    combinedActions.addAll(singleResp.toolActions)
+                    speechParts.add(singleResp.responseText)
+                }
+            }
+
+            if (combinedActions.isNotEmpty()) {
+                val combinedText = speechParts.joinToString(separator = ", aur ")
+                return AgentResponse(
+                    responseText = combinedText,
+                    toolActions = combinedActions
+                )
+            }
+        }
+
+        return parseSingleCommandOffline(clean)
+    }
+
+    private fun parseSingleCommandOffline(prompt: String): AgentResponse {
         val p = prompt.lowercase().trim()
 
         // 1. Flashlight / Torch

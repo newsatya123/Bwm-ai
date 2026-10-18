@@ -44,7 +44,8 @@ fun QuickActionChips(
     modifier: Modifier = Modifier
 ) {
     val actions = listOf(
-        QuickAction("Hey BWM", Icons.Default.ElectricBolt, "hey bwm what can you do?"),
+        QuickAction("Torch + YouTube", Icons.Default.ElectricBolt, "turn on flashlight and open youtube"),
+        QuickAction("Volume + Camera", Icons.AutoMirrored.Filled.VolumeUp, "volume up and open camera"),
         QuickAction("Torch On", Icons.Default.FlashlightOn, "turn on flashlight"),
         QuickAction("Battery", Icons.Default.BatteryChargingFull, "check battery status"),
         QuickAction("Volume Up", Icons.AutoMirrored.Filled.VolumeUp, "increase volume"),
@@ -54,8 +55,7 @@ fun QuickActionChips(
         QuickAction("Open YouTube", Icons.Default.Apps, "open youtube"),
         QuickAction("Open Camera", Icons.Default.Apps, "open camera"),
         QuickAction("New Note", Icons.AutoMirrored.Filled.NoteAdd, "save note: Meeting at 4 PM"),
-        QuickAction("Phone Dialer", Icons.Default.Phone, "dial phone 198"),
-        QuickAction("Wi-Fi Settings", Icons.Default.Settings, "open wifi settings")
+        QuickAction("Phone Dialer", Icons.Default.Phone, "dial phone 198")
     )
 
     Row(

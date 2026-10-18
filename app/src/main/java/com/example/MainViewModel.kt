@@ -5,7 +5,9 @@ import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.ActionLogItem
+import com.example.data.local.AppSettingsManager
 import com.example.data.local.AssistantDatabase
+import com.example.data.local.AssistantLogoTheme
 import com.example.data.local.ConversationMessage
 import com.example.data.local.NoteItem
 import com.example.data.remote.GeminiAssistantAgent
@@ -19,6 +21,7 @@ import com.example.engine.voice.SpeechRecognizerManager
 import com.example.engine.voice.TextToSpeechManager
 import com.example.engine.voice.WakeWordDetector
 import com.example.service.BwmAccessibilityService
+import com.example.service.VoiceAssistantService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,6 +37,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val context: Context get() = getApplication<Application>().applicationContext
     private val database = AssistantDatabase.getDatabase(context)
     private val dao = database.assistantDao()
+
+    val settingsManager = AppSettingsManager(context)
+    val assistantName: StateFlow<String> = settingsManager.assistantName
+    val logoTheme: StateFlow<AssistantLogoTheme> = settingsManager.logoTheme
+    val isContinuousListening: StateFlow<Boolean> = settingsManager.isContinuousListening
+    val autoBackgroundListening: StateFlow<Boolean> = settingsManager.autoBackgroundListeningOnAppLaunch
 
     val appLauncher = AppLauncher(context)
     val deviceController = DeviceController(context)
@@ -85,13 +94,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         refreshApps()
         startWakeWordEngineIfEnabled()
 
-        // Track TTS state to reset assistant to IDLE when done speaking
+        // Track TTS state to reset assistant or continue listening seamlessly
         viewModelScope.launch {
             ttsManager.isSpeaking.collect { isSpeaking ->
                 if (!isSpeaking && _uiState.value == AssistantUiState.SPEAKING) {
-                    _uiState.value = AssistantUiState.IDLE
-                    _currentStatusMessage.value = "Listening for 'Hey BWM' or tap microphone"
-                    startWakeWordEngineIfEnabled()
+                    if (isContinuousListening.value) {
+                        _currentStatusMessage.value = "Continuous listening active... Speak your next command"
+                        kotlinx.coroutines.delay(450)
+                        startVoiceListening()
+                    } else {
+                        _uiState.value = AssistantUiState.IDLE
+                        _currentStatusMessage.value = "Listening for '${assistantName.value}' or tap microphone"
+                        startWakeWordEngineIfEnabled()
+                    }
                 }
             }
         }
@@ -100,6 +115,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun initSpeechRecognizer() {
         speechRecognizerManager = SpeechRecognizerManager(context) { finalTranscription ->
             handleUserInput(finalTranscription)
+        }.apply {
+            isContinuousMode = isContinuousListening.value
         }
 
         viewModelScope.launch {
@@ -107,7 +124,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 when (recState) {
                     is SpeechRecognitionState.Listening -> {
                         _uiState.value = AssistantUiState.LISTENING
-                        _currentStatusMessage.value = "Listening... Speak in Hindi or English"
+                        _currentStatusMessage.value = if (isContinuousListening.value) {
+                            "Continuous listening active... Speak in Hindi or English"
+                        } else {
+                            "Listening... Speak in Hindi or English"
+                        }
                     }
                     is SpeechRecognitionState.PartialResult -> {
                         _currentInterimText.value = recState.text
@@ -116,19 +137,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         _currentInterimText.value = ""
                     }
                     is SpeechRecognitionState.Error -> {
-                        _uiState.value = AssistantUiState.ERROR
-                        _currentStatusMessage.value = recState.message
-                        viewModelScope.launch {
-                            kotlinx.coroutines.delay(3000)
-                            if (_uiState.value == AssistantUiState.ERROR) {
-                                _uiState.value = AssistantUiState.IDLE
-                                _currentStatusMessage.value = "Ready for commands"
-                                startWakeWordEngineIfEnabled()
+                        if (isContinuousListening.value && (recState.errorCode == android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT || recState.errorCode == android.speech.SpeechRecognizer.ERROR_NO_MATCH)) {
+                            // Silently continue listening in continuous mode
+                            _currentStatusMessage.value = "Continuous listening active..."
+                        } else {
+                            _uiState.value = AssistantUiState.ERROR
+                            _currentStatusMessage.value = recState.message
+                            viewModelScope.launch {
+                                kotlinx.coroutines.delay(2500)
+                                if (_uiState.value == AssistantUiState.ERROR) {
+                                    if (isContinuousListening.value) {
+                                        startVoiceListening()
+                                    } else {
+                                        _uiState.value = AssistantUiState.IDLE
+                                        _currentStatusMessage.value = "Ready for commands"
+                                        startWakeWordEngineIfEnabled()
+                                    }
+                                }
                             }
                         }
                     }
                     is SpeechRecognitionState.Idle -> {
-                        if (_uiState.value == AssistantUiState.LISTENING) {
+                        if (_uiState.value == AssistantUiState.LISTENING && !isContinuousListening.value) {
                             _uiState.value = AssistantUiState.IDLE
                         }
                     }
@@ -170,7 +200,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _isWakeWordEnabled.value = enabled
         if (enabled) {
             startWakeWordEngineIfEnabled()
-            _currentStatusMessage.value = "Wake-word 'Hey BWM' enabled"
+            _currentStatusMessage.value = "Wake-word enabled ('Hey ${assistantName.value}')"
         } else {
             wakeWordEngine.stop()
             _currentStatusMessage.value = "Wake-word disabled"
@@ -189,15 +219,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun startVoiceListening() {
+    fun startVoiceListening() {
         ttsManager.stop()
         wakeWordEngine.stop()
         _currentInterimText.value = ""
+        speechRecognizerManager?.isContinuousMode = isContinuousListening.value
         speechRecognizerManager?.currentLanguageCode = selectedLanguage.value
         speechRecognizerManager?.startListening()
     }
 
-    private fun stopVoiceListening() {
+    fun stopVoiceListening() {
         speechRecognizerManager?.stopListening()
         _uiState.value = AssistantUiState.IDLE
         _currentInterimText.value = ""
@@ -208,7 +239,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun stopSpeaking() {
         ttsManager.stop()
         _uiState.value = AssistantUiState.IDLE
-        startWakeWordEngineIfEnabled()
+        if (isContinuousListening.value) {
+            startVoiceListening()
+        } else {
+            startWakeWordEngineIfEnabled()
+        }
+    }
+
+    fun setContinuousListening(enabled: Boolean) {
+        settingsManager.setContinuousListening(enabled)
+        speechRecognizerManager?.isContinuousMode = enabled
+    }
+
+    fun updateAssistantName(name: String) {
+        settingsManager.setAssistantName(name)
+    }
+
+    fun updateLogoTheme(theme: AssistantLogoTheme) {
+        settingsManager.setLogoTheme(theme)
+    }
+
+    fun setAutoBackgroundListening(enabled: Boolean) {
+        settingsManager.setAutoBackgroundListening(enabled)
     }
 
     fun handleUserInput(rawText: String) {
@@ -232,21 +284,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             )
 
-            // Gather recent history for contextual conversations
+            // Contextual chat history
             val historyPairs = messages.value.takeLast(6).map { it.role to it.content }
 
             val agentResponse = withContext(Dispatchers.IO) {
                 geminiAgent.processCommand(query, historyPairs)
             }
 
-            if (agentResponse.requiresConfirmation && agentResponse.toolAction != null) {
+            if (agentResponse.requiresConfirmation && agentResponse.toolActions.isNotEmpty()) {
                 _uiState.value = AssistantUiState.IDLE
                 _pendingConfirmation.value = ConfirmationDialogData(
                     title = "Confirm Action",
                     message = agentResponse.confirmationPrompt ?: "Are you sure you want to proceed with this action?",
                     onConfirm = {
                         _pendingConfirmation.value = null
-                        executeActionAndRespond(agentResponse.toolAction, agentResponse.responseText)
+                        executeActionsAndRespond(agentResponse.toolActions, agentResponse.responseText)
                     },
                     onCancel = {
                         _pendingConfirmation.value = null
@@ -257,8 +309,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                 )
-            } else if (agentResponse.toolAction != null) {
-                executeActionAndRespond(agentResponse.toolAction, agentResponse.responseText)
+            } else if (agentResponse.toolActions.isNotEmpty()) {
+                // Multi-task or single task execution
+                executeActionsAndRespond(agentResponse.toolActions, agentResponse.responseText)
             } else {
                 // Pure conversational response
                 onAssistantFinished(
@@ -271,23 +324,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun executeActionAndRespond(action: ToolActionRequest, spokenResponse: String) {
+    private fun executeActionsAndRespond(actions: List<ToolActionRequest>, defaultSpokenResponse: String) {
+        if (actions.isEmpty()) {
+            viewModelScope.launch {
+                onAssistantFinished(
+                    displayText = defaultSpokenResponse,
+                    spokenText = defaultSpokenResponse,
+                    actionType = null,
+                    isSuccess = true
+                )
+            }
+            return
+        }
+
         viewModelScope.launch {
             _uiState.value = AssistantUiState.EXECUTING
-            _currentStatusMessage.value = "Executing action..."
+            val speechResults = mutableListOf<String>()
+            val detailsList = mutableListOf<String>()
+            var allSuccess = true
 
-            val (success, detail, spokenResult) = withContext(Dispatchers.IO) {
-                performToolAction(action)
+            // Sequential multi-task execution loop
+            for ((index, action) in actions.withIndex()) {
+                _currentStatusMessage.value = "Executing task ${index + 1} of ${actions.size}..."
+                val (success, detail, spokenResult) = withContext(Dispatchers.IO) {
+                    performToolAction(action)
+                }
+                if (!success) allSuccess = false
+                if (spokenResult.isNotBlank()) speechResults.add(spokenResult)
+                if (detail.isNotBlank()) detailsList.add(detail)
+
+                if (index < actions.size - 1) {
+                    kotlinx.coroutines.delay(400)
+                }
             }
 
-            val finalSpeech = if (spokenResult.isNotBlank()) spokenResult else spokenResponse
+            val finalSpeech = if (speechResults.isNotEmpty()) {
+                speechResults.joinToString(", aur ")
+            } else defaultSpokenResponse
+
+            val combinedTypes = actions.joinToString(" + ") { it.javaClass.simpleName }
 
             onAssistantFinished(
                 displayText = finalSpeech,
                 spokenText = finalSpeech,
-                actionType = action.javaClass.simpleName,
-                actionDetail = detail,
-                isSuccess = success
+                actionType = combinedTypes,
+                actionDetail = detailsList.joinToString(" | "),
+                isSuccess = allSuccess
             )
         }
     }
@@ -336,7 +418,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 Triple(true, msg, msg)
             }
             is ToolActionRequest.GetNotes -> {
-                val recentNotes = dao.getAllNotes()
                 val list = withContext(Dispatchers.IO) {
                     dao.searchNotes("")
                 }
