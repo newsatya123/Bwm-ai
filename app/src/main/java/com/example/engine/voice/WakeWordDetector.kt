@@ -34,6 +34,7 @@ interface WakeWordDetector {
     fun isSupported(): Boolean
     fun simulateWakeWord(attachedCommand: String? = null)
     fun setCustomAssistantName(name: String)
+    fun setSensitivity(sensitivity: Float)
 }
 
 class ModularWakeWordEngine(private val context: Context) : WakeWordDetector {
@@ -113,9 +114,14 @@ class ModularWakeWordEngine(private val context: Context) : WakeWordDetector {
     private var onDetectedCallback: ((String?) -> Unit)? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private var customAssistantName: String = "BWM"
+    private var sensitivity: Float = 0.5f
 
     override fun setCustomAssistantName(name: String) {
         customAssistantName = name
+    }
+
+    override fun setSensitivity(sensitivity: Float) {
+        this.sensitivity = sensitivity.coerceIn(0.1f, 1.0f)
     }
 
     override fun isSupported(): Boolean {
@@ -211,7 +217,9 @@ class ModularWakeWordEngine(private val context: Context) : WakeWordDetector {
 
                 // Smooth noise floor
                 noiseFloor = (noiseFloor * 0.95) + (rms * 0.05)
-                val voiceThreshold = (noiseFloor * 2.8).coerceAtLeast(650.0)
+                val multiplier = (4.0 - (sensitivity * 2.4)).coerceIn(1.5, 4.5)
+                val minCutoff = (1100.0 - (sensitivity * 800.0)).coerceIn(280.0, 1200.0)
+                val voiceThreshold = (noiseFloor * multiplier).coerceAtLeast(minCutoff)
 
                 val currentTime = System.currentTimeMillis()
 

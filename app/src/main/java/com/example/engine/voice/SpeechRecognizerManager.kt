@@ -11,6 +11,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.Locale
 
+import android.content.ComponentName
+import com.example.data.local.SttProvider
+
 sealed class SpeechRecognitionState {
     object Idle : SpeechRecognitionState()
     object Ready : SpeechRecognitionState()
@@ -34,6 +37,7 @@ class SpeechRecognizerManager(
 
     var currentLanguageCode: String = "en-IN"
     var isContinuousMode: Boolean = false
+    var sttProvider: SttProvider = SttProvider.SYSTEM_DEFAULT
 
     fun isRecognitionAvailable(): Boolean {
         return SpeechRecognizer.isRecognitionAvailable(context)
@@ -51,7 +55,22 @@ class SpeechRecognizerManager(
         }
 
         try {
-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
+            speechRecognizer = when (sttProvider) {
+                SttProvider.GOOGLE_VOICE -> {
+                    try {
+                        val googleComp = ComponentName(
+                            "com.google.android.googlequicksearchbox",
+                            "com.google.android.voicesearch.serviceapi.GoogleRecognitionService"
+                        )
+                        SpeechRecognizer.createSpeechRecognizer(context, googleComp)
+                    } catch (_: Exception) {
+                        SpeechRecognizer.createSpeechRecognizer(context)
+                    }
+                }
+                else -> {
+                    SpeechRecognizer.createSpeechRecognizer(context)
+                }
+            }.apply {
                 setRecognitionListener(createListener())
             }
 
@@ -62,6 +81,11 @@ class SpeechRecognizerManager(
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
                 putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf("hi-IN", "en-IN", "en-US"))
+
+                if (sttProvider == SttProvider.OFFLINE_HYBRID) {
+                    putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                    putExtra("android.speech.extra.PREFER_OFFLINE", true)
+                }
             }
 
             speechRecognizer?.startListening(intent)

@@ -28,6 +28,10 @@ sealed class ToolActionRequest {
     data class DeviceNavigation(val action: String) : ToolActionRequest()
     data class YouTubeSearch(val query: String, val autoPlayFirst: Boolean = false) : ToolActionRequest()
     data class YouTubeControl(val action: String) : ToolActionRequest()
+    data class WhatsAppSend(val recipient: String, val message: String, val directSend: Boolean = false) : ToolActionRequest()
+    data class WhatsAppOpenChat(val recipient: String) : ToolActionRequest()
+    data class WhatsAppSearch(val query: String) : ToolActionRequest()
+    data class ActiveAppContextAction(val action: String, val parameter: String? = null) : ToolActionRequest()
 }
 
 data class AgentResponse(
@@ -249,6 +253,40 @@ class GeminiAssistantAgent {
             listOf("action")
         ))
 
+        functionDeclarations.put(createTool(
+            "whatsapp_send_message",
+            "Send or compose a WhatsApp message to a contact or phone number",
+            listOf(
+                "recipient" to "Name of contact or phone number (e.g. Raman, Papa, Neha, 9876543210)",
+                "message" to "Text message content to send"
+            ),
+            listOf("recipient", "message")
+        ))
+
+        functionDeclarations.put(createTool(
+            "whatsapp_open_chat",
+            "Open WhatsApp conversation chat with a contact or phone number",
+            listOf("recipient" to "Name of contact or phone number (e.g. Raman, Papa, Neha)"),
+            listOf("recipient")
+        ))
+
+        functionDeclarations.put(createTool(
+            "whatsapp_search",
+            "Search for a contact, message, or term inside WhatsApp",
+            listOf("query" to "Search keyword or contact name"),
+            listOf("query")
+        ))
+
+        functionDeclarations.put(createTool(
+            "active_app_control",
+            "Perform context-aware active application actions: scroll_down, scroll_up, pause, play, next, back, home, or send",
+            listOf(
+                "action" to "scroll_down, scroll_up, pause, play, next, back, home, or send",
+                "parameter" to "Optional target or parameter"
+            ),
+            listOf("action")
+        ))
+
         toolsContainer.put("functionDeclarations", functionDeclarations)
         toolsArray.put(toolsContainer)
         root.put("tools", toolsArray)
@@ -381,6 +419,30 @@ class GeminiAssistantAgent {
                         val action = args.optString("action", "pause")
                         toolActions.add(ToolActionRequest.YouTubeControl(action))
                         if (textResponse.isBlank()) textResponse = "Executing YouTube $action command..."
+                    }
+                    "whatsapp_send_message" -> {
+                        val recipient = args.optString("recipient", "")
+                        val message = args.optString("message", "")
+                        toolActions.add(ToolActionRequest.WhatsAppSend(recipient, message))
+                        requiresConfirmation = true
+                        confirmationPrompt = "Kya aap $recipient ko WhatsApp par \"$message\" bhejna chahte hain?"
+                        if (textResponse.isBlank()) textResponse = "Sending WhatsApp message to $recipient..."
+                    }
+                    "whatsapp_open_chat" -> {
+                        val recipient = args.optString("recipient", "")
+                        toolActions.add(ToolActionRequest.WhatsAppOpenChat(recipient))
+                        if (textResponse.isBlank()) textResponse = "WhatsApp par $recipient ka chat khol raha hoon..."
+                    }
+                    "whatsapp_search" -> {
+                        val query = args.optString("query", "")
+                        toolActions.add(ToolActionRequest.WhatsAppSearch(query))
+                        if (textResponse.isBlank()) textResponse = "WhatsApp par $query search kar raha hoon..."
+                    }
+                    "active_app_control" -> {
+                        val action = args.optString("action", "scroll_down")
+                        val param = args.optString("parameter", "")
+                        toolActions.add(ToolActionRequest.ActiveAppContextAction(action, if (param.isNotEmpty()) param else null))
+                        if (textResponse.isBlank()) textResponse = "Executing $action..."
                     }
                 }
             }
@@ -527,17 +589,110 @@ class GeminiAssistantAgent {
         }
 
         // 7. Navigation (Back / Home / Notifications)
-        if (p.contains("go back") || p.contains("peeche jao") || p.contains("back karo")) {
-            return AgentResponse("Going back...", ToolActionRequest.DeviceNavigation("back"))
+        if (p.contains("go back") || p.contains("peeche jao") || p.contains("back karo") || p.contains("back jao") || p == "back") {
+            return AgentResponse("Going back...", ToolActionRequest.ActiveAppContextAction("back"))
         }
-        if (p.contains("go home") || p.contains("home screen") || p.contains("home jao")) {
-            return AgentResponse("Going to home screen...", ToolActionRequest.DeviceNavigation("home"))
+        if (p.contains("go home") || p.contains("home screen") || p.contains("home jao") || p == "home") {
+            return AgentResponse("Going to home screen...", ToolActionRequest.ActiveAppContextAction("home"))
         }
         if (p.contains("notification") || p.contains("shade")) {
             return AgentResponse("Opening notifications...", ToolActionRequest.DeviceNavigation("notifications"))
         }
 
-        // 8. Notes
+        // 8. Active App Scrolling & Context Controls
+        if (p.contains("upar scroll") || p.contains("scroll up") || p.contains("up scroll")) {
+            return AgentResponse("Scrolling up...", ToolActionRequest.ActiveAppContextAction("scroll_up"))
+        }
+        if (p.contains("neeche scroll") || p.contains("scroll down") || p.contains("down scroll") || p.contains("scroll")) {
+            return AgentResponse("Scrolling down...", ToolActionRequest.ActiveAppContextAction("scroll_down"))
+        }
+        if (p == "pause" || p == "pause karo" || p == "roko" || p == "ruk jao" || p == "stop") {
+            return AgentResponse("Pausing active playback...", ToolActionRequest.ActiveAppContextAction("pause"))
+        }
+        if (p == "play" || p == "play karo" || p == "chalao" || p == "resume" || p == "resume karo") {
+            return AgentResponse("Resuming active playback...", ToolActionRequest.ActiveAppContextAction("play"))
+        }
+        if (p == "next" || p == "next karo" || p == "agla" || p == "agla video" || p == "next video") {
+            return AgentResponse("Skipping to next...", ToolActionRequest.ActiveAppContextAction("next"))
+        }
+
+        // 9. WhatsApp Voice Features
+        // 9a. WhatsApp Search: "WhatsApp mein search karo [query]"
+        if (p.contains("whatsapp") && (p.contains("search") || p.contains("khojo") || p.contains("dhoondo"))) {
+            val q = p
+                .replace(Regex("(?i)\\b(whatsapp\\s*(mein|par|pe)?|search\\s*karo|khojo|dhoondo|please|karo)\\b"), "")
+                .trim()
+            return AgentResponse(
+                responseText = if (q.isNotEmpty()) "WhatsApp mein \"$q\" search kar rahe hain..." else "WhatsApp search khol rahe hain...",
+                toolAction = ToolActionRequest.WhatsAppSearch(q)
+            )
+        }
+
+        // 9b. WhatsApp Send Message:
+        // Examples: "Raman ko hii bhejo", "Raman ko message bhejo: main ghar aa raha hoon", "Neha ko WhatsApp par message bhejo: hello"
+        val sendPatterns = listOf(
+            Pattern.compile("(?i)^([a-zA-Z0-9\u0900-\u097F]+)\\s+ko\\s+(?:whatsapp\\s*(?:par|pe)?\\s+)?(?:message|msg)?\\s*bhejo\\s*[:\\-]?\\s*(.*)$"),
+            Pattern.compile("(?i)^([a-zA-Z0-9\u0900-\u097F]+)\\s+ko\\s+(?:whatsapp\\s*(?:par|pe)?\\s+)?message\\s+bhejo[:\\s]*(.*)$"),
+            Pattern.compile("(?i)^([a-zA-Z0-9\u0900-\u097F]+)\\s+ko\\s+(?:whatsapp\\s*(?:par|pe)?\\s+)?(.*)\\s+bhejo$"),
+            Pattern.compile("(?i)^send\\s+(?:a\\s+)?(?:whatsapp\\s+)?message\\s+to\\s+([a-zA-Z0-9\u0900-\u097F]+)[:\\s]+(.*)$"),
+            Pattern.compile("(?i)^send\\s+(?:whatsapp\\s+)?(.*)\\s+to\\s+([a-zA-Z0-9\u0900-\u097F]+)$")
+        )
+
+        for (pattern in sendPatterns) {
+            val matcher = pattern.matcher(prompt.trim())
+            if (matcher.find()) {
+                var recipient: String
+                var messageText: String
+
+                if (pattern.pattern().startsWith("(?i)^send\\s+(?:whatsapp\\s+)?(.*)\\s+to")) {
+                    messageText = matcher.group(1)?.trim() ?: ""
+                    recipient = matcher.group(2)?.trim() ?: ""
+                } else {
+                    recipient = matcher.group(1)?.trim() ?: ""
+                    messageText = matcher.group(2)?.trim() ?: ""
+                }
+
+                // If message text was empty or just "hii", set default
+                if (messageText.isBlank()) {
+                    messageText = "Hi"
+                }
+
+                // Clean up prefixes from message
+                messageText = messageText.removePrefix(":").trim()
+                if (messageText.isBlank()) messageText = "Hi"
+
+                val isDirectSend = p.contains("direct") || p.contains("bina confirmation")
+                return AgentResponse(
+                    responseText = "WhatsApp par $recipient ko \"$messageText\" bhejna hai.",
+                    toolAction = ToolActionRequest.WhatsAppSend(recipient, messageText, directSend = isDirectSend),
+                    requiresConfirmation = !isDirectSend,
+                    confirmationPrompt = "Kya aap $recipient ko WhatsApp par \"$messageText\" bhejna chahte hain?"
+                )
+            }
+        }
+
+        // 9c. WhatsApp Open Chat:
+        // Examples: "Raman ki chat kholo", "Papa ka WhatsApp chat kholo", "Raman ka chat kholo", "open chat with Raman"
+        val openChatPatterns = listOf(
+            Pattern.compile("(?i)^([a-zA-Z0-9\u0900-\u097F]+)\\s+(?:ka|ki|ke)?\\s*(?:whatsapp\\s*)?chat\\s*(?:kholo|open|chalao)"),
+            Pattern.compile("(?i)^(?:whatsapp\\s*(?:par|pe)?\\s*)?([a-zA-Z0-9\u0900-\u097F]+)\\s+(?:ka|ki|ke)?\\s*chat\\s*(?:kholo|open)"),
+            Pattern.compile("(?i)^open\\s+(?:whatsapp\\s+)?chat\\s+(?:with|of)?\\s*([a-zA-Z0-9\u0900-\u097F]+)")
+        )
+
+        for (pattern in openChatPatterns) {
+            val matcher = pattern.matcher(prompt.trim())
+            if (matcher.find()) {
+                val recipient = matcher.group(1)?.trim() ?: ""
+                if (recipient.isNotBlank() && recipient.lowercase() != "whatsapp") {
+                    return AgentResponse(
+                        responseText = "WhatsApp par $recipient ka chat khol raha hoon...",
+                        toolAction = ToolActionRequest.WhatsAppOpenChat(recipient)
+                    )
+                }
+            }
+        }
+
+        // 10. Notes
         if (p.contains("note") || p.contains("yaad rakhna") || p.contains("likho")) {
             val noteText = p.replace(Regex("note|likho|yaad rakhna|save|karo|banao"), "").trim()
             val finalContent = if (noteText.isNotEmpty()) noteText else "Quick Voice Note: $prompt"
@@ -547,7 +702,7 @@ class GeminiAssistantAgent {
             )
         }
 
-        // 9. Dial Phone
+        // 11. Dial Phone
         if (p.contains("dial") || p.contains("call") || p.contains("phone lagao")) {
             val digits = prompt.replace(Regex("[^0-9+]"), "")
             return if (digits.length >= 3) {

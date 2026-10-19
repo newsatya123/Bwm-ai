@@ -153,94 +153,47 @@ fun AssistantMainScreen(
             .fillMaxSize()
             .background(DeepNavyDark)
     ) {
-        // --- TOP APP BAR ---
+        // --- TOP APP BAR (CLEAN & MINIMAL HEADER) ---
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 20.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(if (isServiceRunning || isWakeWordEnabled) RadiantEmerald else TextMuted)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = assistantName,
                         fontSize = 22.sp,
                         fontWeight = FontWeight.Black,
                         color = logoTheme.primaryColor
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    Surface(
-                        color = if (isWakeWordEnabled) RadiantEmerald.copy(alpha = 0.2f) else SurfaceVariantNavy,
-                        shape = RoundedCornerShape(8.dp),
-                        border = androidx.compose.foundation.BorderStroke(
-                            1.dp,
-                            if (isWakeWordEnabled) RadiantEmerald else CardBorderNavy
-                        ),
-                        modifier = Modifier
-                            .clickable { viewModel.toggleWakeWord(!isWakeWordEnabled) }
-                            .testTag("wake_word_top_badge")
-                    ) {
-                        Text(
-                            text = if (isWakeWordEnabled) "⚡ Hey $assistantName" else "⚡ Wake OFF",
-                            color = if (isWakeWordEnabled) RadiantEmerald else TextSecondary,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(6.dp))
-
-                    Surface(
-                        color = if (isContinuousListening) RadiantEmerald.copy(alpha = 0.2f) else SurfaceVariantNavy,
-                        shape = RoundedCornerShape(8.dp),
-                        border = androidx.compose.foundation.BorderStroke(
-                            1.dp,
-                            if (isContinuousListening) RadiantEmerald else CardBorderNavy
-                        ),
-                        modifier = Modifier
-                            .clickable { viewModel.setContinuousListening(!isContinuousListening) }
-                            .testTag("continuous_listening_top_badge")
-                    ) {
-                        Text(
-                            text = if (isContinuousListening) "🔄 Continuous" else "Single Tap",
-                            color = if (isContinuousListening) RadiantEmerald else TextSecondary,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-
-                    if (isServiceRunning) {
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Surface(
-                            color = RadiantEmerald.copy(alpha = 0.2f),
-                            shape = RoundedCornerShape(8.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, RadiantEmerald)
-                        ) {
-                            Text(
-                                text = "BG MIC ON",
-                                color = RadiantEmerald,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
                 }
                 Text(
-                    text = "Personal Phone Assistant",
+                    text = "Context-Aware Voice Assistant",
                     fontSize = 11.sp,
-                    color = TextSecondary
+                    color = TextSecondary,
+                    modifier = Modifier.padding(start = 18.dp)
                 )
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Language Selector Pill
                 Surface(
                     color = SurfaceVariantNavy,
                     shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, CardBorderNavy),
                     modifier = Modifier
                         .clickable {
                             val next = when (selectedLang) {
@@ -250,7 +203,7 @@ fun AssistantMainScreen(
                             }
                             viewModel.selectedLanguage.value = next
                         }
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .testTag("lang_toggle_pill")
                 ) {
                     Text(
                         text = when (selectedLang) {
@@ -260,24 +213,30 @@ fun AssistantMainScreen(
                         },
                         fontSize = 12.sp,
                         color = NeonCyan,
-                        fontWeight = FontWeight.Medium
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                     )
                 }
 
-                IconButton(onClick = onNavigateToApps, modifier = Modifier.testTag("nav_apps_btn")) {
-                    Icon(Icons.Default.Apps, contentDescription = "Installed Apps", tint = TextSecondary)
-                }
-                IconButton(onClick = onNavigateToNotes, modifier = Modifier.testTag("nav_notes_btn")) {
-                    Icon(Icons.AutoMirrored.Filled.Note, contentDescription = "Voice Notes", tint = TextSecondary)
-                }
-                IconButton(onClick = onNavigateToHistory, modifier = Modifier.testTag("nav_history_btn")) {
-                    Icon(Icons.Default.History, contentDescription = "Action Logs", tint = TextSecondary)
-                }
-                IconButton(onClick = onNavigateToPermissions, modifier = Modifier.testTag("nav_permissions_btn")) {
-                    Icon(Icons.Default.Security, contentDescription = "Permissions", tint = TextSecondary)
-                }
-                IconButton(onClick = onNavigateToSettings, modifier = Modifier.testTag("nav_settings_btn")) {
-                    Icon(Icons.Default.Settings, contentDescription = "Settings", tint = TextSecondary)
+                // Wake Word State Badge
+                Surface(
+                    color = if (isWakeWordEnabled) RadiantEmerald.copy(alpha = 0.15f) else SurfaceVariantNavy,
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (isWakeWordEnabled) RadiantEmerald.copy(alpha = 0.6f) else CardBorderNavy
+                    ),
+                    modifier = Modifier
+                        .clickable { viewModel.toggleWakeWord(!isWakeWordEnabled) }
+                        .testTag("wake_word_top_badge")
+                ) {
+                    Text(
+                        text = if (isWakeWordEnabled) "⚡ Hey $assistantName" else "⚡ Wake OFF",
+                        color = if (isWakeWordEnabled) RadiantEmerald else TextSecondary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
                 }
             }
         }

@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,24 +24,32 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.ElectricBolt
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Hearing
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PictureInPicture
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
@@ -61,15 +72,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.AssistantUiState
 import com.example.BuildConfig
 import com.example.MainViewModel
 import com.example.data.local.AssistantLogoTheme
+import com.example.data.local.SttProvider
 import com.example.ui.components.OrbVisualizer
-import com.example.AssistantUiState
 import com.example.ui.theme.CardBorderNavy
 import com.example.ui.theme.DeepNavyDark
 import com.example.ui.theme.ElectricViolet
@@ -93,6 +106,9 @@ fun SettingsScreen(
     val isContinuousListening by viewModel.isContinuousListening.collectAsState()
     val autoBgListening by viewModel.autoBackgroundListening.collectAsState()
     val isWakeWordEnabled by viewModel.isWakeWordEnabled.collectAsState()
+    val micSensitivity by viewModel.micSensitivity.collectAsState()
+    val sttProvider by viewModel.sttProvider.collectAsState()
+    val isWhatsappDirectSend by viewModel.isWhatsappDirectSend.collectAsState()
     val selectedLang by viewModel.selectedLanguage.collectAsState()
 
     var nameInput by remember(assistantName) { mutableStateOf(assistantName) }
@@ -101,6 +117,13 @@ fun SettingsScreen(
     var speechRate by remember { mutableFloatStateOf(viewModel.ttsManager.speechRate) }
     var speechPitch by remember { mutableFloatStateOf(viewModel.ttsManager.speechPitch) }
     var ttsEnabled by remember { mutableFloatStateOf(if (viewModel.ttsManager.isTtsEnabled) 1f else 0f) }
+
+    var hasContactsPerm by remember { mutableStateOf(viewModel.contactsManager.hasContactsPermission()) }
+    val contactsPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        hasContactsPerm = isGranted
+    }
 
     val hasGeminiKey = BuildConfig.GEMINI_API_KEY.isNotBlank() && BuildConfig.GEMINI_API_KEY != "MY_GEMINI_API_KEY"
 
@@ -127,7 +150,7 @@ fun SettingsScreen(
                 )
             }
             Text(
-                text = "Assistant Settings & Customization",
+                text = "Assistant Settings & Controls",
                 color = TextPrimary,
                 fontSize = 19.sp,
                 fontWeight = FontWeight.Bold,
@@ -143,7 +166,325 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
 
-            // 1. ASSISTANT NAME CUSTOMIZATION
+            // 1. WAKE-WORD DETECTION TOGGLE & SENSITIVITY
+            Card(
+                colors = CardDefaults.cardColors(containerColor = SurfaceNavy),
+                shape = RoundedCornerShape(14.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, if (isWakeWordEnabled) RadiantEmerald.copy(alpha = 0.5f) else CardBorderNavy),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Mic, contentDescription = null, tint = logoTheme.primaryColor)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Wake Word (\"Hey $assistantName\")", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        }
+
+                        Switch(
+                            checked = isWakeWordEnabled,
+                            onCheckedChange = { viewModel.toggleWakeWord(it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = DeepNavyDark,
+                                checkedTrackColor = RadiantEmerald,
+                                uncheckedThumbColor = TextMuted,
+                                uncheckedTrackColor = SurfaceVariantNavy
+                            ),
+                            modifier = Modifier.testTag("wake_word_switch")
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = if (isWakeWordEnabled) {
+                            "Hands-free silent wake word engine active. Bolne par 'Hey $assistantName' ya 'Suno $assistantName' detect karke command capture start karega (Zero annoying beep sounds)."
+                        } else {
+                            "Wake word detection is disabled. Tap orb or microphone manually to speak."
+                        },
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp
+                    )
+
+                    if (isWakeWordEnabled) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                color = RadiantEmerald.copy(alpha = 0.15f),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text(
+                                    text = "⚡ Engine: Silent RMS Energy Detector",
+                                    color = RadiantEmerald,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+
+                            OutlinedButton(
+                                onClick = { viewModel.triggerHeyBwmTest() },
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = NeonCyan),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.testTag("test_wake_word_btn")
+                            ) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Test Trigger", fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. MICROPHONE SENSITIVITY ADJUSTMENT
+            Card(
+                colors = CardDefaults.cardColors(containerColor = SurfaceNavy),
+                shape = RoundedCornerShape(14.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, CardBorderNavy),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Tune, contentDescription = null, tint = NeonCyan)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Microphone Sensitivity", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        }
+
+                        Text(
+                            text = "${(micSensitivity * 100).toInt()}%",
+                            color = NeonCyan,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    val sensitivityLabel = when {
+                        micSensitivity <= 0.25f -> "Low Sensitivity — Best for noisy / crowded rooms (requires clear, loud voice)"
+                        micSensitivity <= 0.55f -> "Balanced (Default) — Standard room environment, natural speech volume"
+                        micSensitivity <= 0.8f -> "High Sensitivity — Quiet room, sensitive to normal speech"
+                        else -> "Ultra Sensitive — Detects soft whispers & distance voice (may catch room echo)"
+                    }
+                    Text(
+                        text = sensitivityLabel,
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Slider(
+                        value = micSensitivity,
+                        onValueChange = { viewModel.setMicSensitivity(it) },
+                        valueRange = 0.1f..1.0f,
+                        steps = 8,
+                        colors = SliderDefaults.colors(
+                            thumbColor = NeonCyan,
+                            activeTrackColor = NeonCyan,
+                            inactiveTrackColor = SurfaceVariantNavy
+                        ),
+                        modifier = Modifier.testTag("mic_sensitivity_slider")
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Quiet / Low", color = TextMuted, fontSize = 10.sp)
+                        Text("Normal (50%)", color = TextMuted, fontSize = 10.sp)
+                        Text("Ultra (100%)", color = TextMuted, fontSize = 10.sp)
+                    }
+                }
+            }
+
+            // 3. SPEECH-TO-TEXT (STT) PROVIDER SELECTION
+            Card(
+                colors = CardDefaults.cardColors(containerColor = SurfaceNavy),
+                shape = RoundedCornerShape(14.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, CardBorderNavy),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.RecordVoiceOver, contentDescription = null, tint = ElectricViolet)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Speech-to-Text (STT) Provider", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Choose the voice recognition engine used to transcribe Hindi, Hinglish, and English voice commands:",
+                        color = TextSecondary,
+                        fontSize = 12.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    SttProvider.entries.forEach { provider ->
+                        val isSelected = provider == sttProvider
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isSelected) SurfaceVariantNavy else DeepNavyDark
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            border = androidx.compose.foundation.BorderStroke(
+                                width = if (isSelected) 1.5.dp else 1.dp,
+                                color = if (isSelected) ElectricViolet else CardBorderNavy
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                                .clickable { viewModel.setSttProvider(provider) }
+                                .testTag("stt_provider_${provider.id}")
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = isSelected,
+                                    onClick = { viewModel.setSttProvider(provider) },
+                                    colors = RadioButtonDefaults.colors(
+                                        selectedColor = ElectricViolet,
+                                        unselectedColor = TextMuted
+                                    )
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = provider.displayName,
+                                        color = if (isSelected) ElectricViolet else TextPrimary,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp
+                                    )
+                                    Text(
+                                        text = provider.description,
+                                        color = TextSecondary,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 4. WHATSAPP & CONTACTS AUTOMATION
+            Card(
+                colors = CardDefaults.cardColors(containerColor = SurfaceNavy),
+                shape = RoundedCornerShape(14.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, CardBorderNavy),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null, tint = RadiantEmerald)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("WhatsApp & Contacts Automation", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Supports voice commands like \"Raman ko hii bhejo\", \"Papa ki chat kholo\", and \"WhatsApp mein search karo\".",
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Contacts Permission Status
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(SurfaceVariantNavy, RoundedCornerShape(10.dp))
+                            .padding(10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.Contacts,
+                                contentDescription = null,
+                                tint = if (hasContactsPerm) RadiantEmerald else WarningAmber,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text("Contacts Access", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    if (hasContactsPerm) "Granted (Names & numbers searchable)" else "Permission needed for contact lookup",
+                                    color = if (hasContactsPerm) RadiantEmerald else TextSecondary,
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+
+                        if (!hasContactsPerm) {
+                            Button(
+                                onClick = { contactsPermLauncher.launch(Manifest.permission.READ_CONTACTS) },
+                                colors = ButtonDefaults.buttonColors(containerColor = WarningAmber, contentColor = DeepNavyDark),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Allow", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        } else {
+                            Icon(Icons.Default.CheckCircle, contentDescription = "Granted", tint = RadiantEmerald, modifier = Modifier.size(18.dp))
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Direct Send Toggle
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Direct Send (Skip Confirmation Modal)", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            Text(
+                                "Jab ON hoga, tab message turant WhatsApp Accessibility ke zariye bhej diya jayega bina confirmation dialog dikhaye.",
+                                color = TextSecondary,
+                                fontSize = 11.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        Switch(
+                            checked = isWhatsappDirectSend,
+                            onCheckedChange = { viewModel.setWhatsappDirectSend(it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = DeepNavyDark,
+                                checkedTrackColor = RadiantEmerald,
+                                uncheckedThumbColor = TextMuted,
+                                uncheckedTrackColor = SurfaceVariantNavy
+                            ),
+                            modifier = Modifier.testTag("whatsapp_direct_send_switch")
+                        )
+                    }
+                }
+            }
+
+            // 5. ASSISTANT NAME CUSTOMIZATION
             Card(
                 colors = CardDefaults.cardColors(containerColor = SurfaceNavy),
                 shape = RoundedCornerShape(14.dp),
@@ -159,7 +500,7 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Customize the name of your assistant (e.g. BWM AI, Jarvis, Arya, Nova). The app UI and wake word will adapt to this name.",
+                        text = "Customize the assistant name (e.g. BWM AI, Jarvis, Arya, Nova). The app UI and wake word will adapt to this name.",
                         color = TextSecondary,
                         fontSize = 12.sp
                     )
@@ -223,7 +564,7 @@ fun SettingsScreen(
                 }
             }
 
-            // 2. ASSISTANT LOGO & ORB THEME CUSTOMIZATION
+            // 6. ASSISTANT LOGO & ORB THEME CUSTOMIZATION
             Card(
                 colors = CardDefaults.cardColors(containerColor = SurfaceNavy),
                 shape = RoundedCornerShape(14.dp),
@@ -246,7 +587,6 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Live Orb Preview
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -278,7 +618,6 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Theme selector buttons
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -334,7 +673,7 @@ fun SettingsScreen(
                 }
             }
 
-            // 3. CONTINUOUS LISTENING MODE (Requirement 2)
+            // 7. CONTINUOUS LISTENING MODE
             Card(
                 colors = CardDefaults.cardColors(containerColor = SurfaceNavy),
                 shape = RoundedCornerShape(14.dp),
@@ -376,7 +715,7 @@ fun SettingsScreen(
                 }
             }
 
-            // 4. LISTEN OVER YOUTUBE & OTHER APPS (Requirement 3)
+            // 8. LISTEN OVER YOUTUBE & OTHER APPS
             Card(
                 colors = CardDefaults.cardColors(containerColor = SurfaceNavy),
                 shape = RoundedCornerShape(14.dp),
@@ -418,72 +757,7 @@ fun SettingsScreen(
                 }
             }
 
-            // 5. MULTI-TASKING CAPABILITY EXPLANATION (Requirement 1)
-            Card(
-                colors = CardDefaults.cardColors(containerColor = SurfaceVariantNavy),
-                shape = RoundedCornerShape(14.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, WarningAmber.copy(alpha = 0.4f)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.ElectricBolt, contentDescription = null, tint = WarningAmber)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Multi-Tasking Engine (Active)", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "Aap ek saath multiple commands jod kar bol sakte hain. Assistant sabhi actions ko ek ke baad ek execute karega:\n\n• \"Turn on flashlight and open youtube\"\n• \"Torch on karo aur youtube chalao\"\n• \"Volume badhao aur camera open karo\"",
-                        color = TextSecondary,
-                        fontSize = 12.sp,
-                        lineHeight = 18.sp
-                    )
-                }
-            }
-
-            // 6. WAKE WORD SETTINGS
-            Card(
-                colors = CardDefaults.cardColors(containerColor = SurfaceNavy),
-                shape = RoundedCornerShape(14.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, CardBorderNavy),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Mic, contentDescription = null, tint = logoTheme.primaryColor)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Wake Word (\"Hey $assistantName\")", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                        }
-
-                        Switch(
-                            checked = isWakeWordEnabled,
-                            onCheckedChange = { viewModel.toggleWakeWord(it) },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = DeepNavyDark,
-                                checkedTrackColor = RadiantEmerald,
-                                uncheckedThumbColor = TextMuted,
-                                uncheckedTrackColor = SurfaceVariantNavy
-                            ),
-                            modifier = Modifier.testTag("wake_word_switch")
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Allows hands-free trigger when saying \"Hey $assistantName\" or \"Suno $assistantName\" anytime within the app.",
-                        color = TextSecondary,
-                        fontSize = 12.sp
-                    )
-                }
-            }
-
-            // 7. LANGUAGE SELECTOR
+            // 9. SPEECH RECOGNITION LANGUAGE
             Card(
                 colors = CardDefaults.cardColors(containerColor = SurfaceNavy),
                 shape = RoundedCornerShape(14.dp),
@@ -527,7 +801,7 @@ fun SettingsScreen(
                 }
             }
 
-            // 8. TEXT-TO-SPEECH
+            // 10. TEXT-TO-SPEECH (TTS)
             Card(
                 colors = CardDefaults.cardColors(containerColor = SurfaceNavy),
                 shape = RoundedCornerShape(14.dp),
@@ -588,7 +862,7 @@ fun SettingsScreen(
                 }
             }
 
-            // 9. AI ENGINE STATUS
+            // 11. AI REASONING ENGINE STATUS
             Card(
                 colors = CardDefaults.cardColors(containerColor = SurfaceNavy),
                 shape = RoundedCornerShape(14.dp),
@@ -628,7 +902,7 @@ fun SettingsScreen(
                 }
             }
 
-            // 10. ABOUT APP
+            // 12. ABOUT APP
             Card(
                 colors = CardDefaults.cardColors(containerColor = SurfaceNavy),
                 shape = RoundedCornerShape(14.dp),
@@ -642,8 +916,8 @@ fun SettingsScreen(
                         Text("About $assistantName", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                     }
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("$assistantName — Personal Phone Assistant", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                    Text("Version 1.1.0 • Multi-Tasking & Continuous Listening Enabled", color = TextMuted, fontSize = 12.sp)
+                    Text("$assistantName — Context-Aware Native Assistant", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Version 1.3.0 • WhatsApp & YouTube Context Voice Automation", color = TextMuted, fontSize = 12.sp)
                     Text("Native Android Assistant • Jetpack Compose • Kotlin", color = TextSecondary, fontSize = 11.sp)
                 }
             }

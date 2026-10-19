@@ -294,6 +294,155 @@ class DeviceController(private val context: Context) {
         }
     }
 
+    fun openWhatsAppChat(
+        phoneNumber: String,
+        message: String? = null,
+        autoSend: Boolean = false,
+        recipientName: String? = null
+    ): ToolExecutionResult {
+        return try {
+            val cleanNumber = phoneNumber.replace(Regex("[^0-9+]"), "").removePrefix("+")
+            val encodedMessage = if (!message.isNullOrBlank()) {
+                java.net.URLEncoder.encode(message.trim(), "UTF-8")
+            } else ""
+
+            val waUri = if (cleanNumber.isNotBlank()) {
+                Uri.parse("https://api.whatsapp.com/send?phone=$cleanNumber${if (encodedMessage.isNotBlank()) "&text=$encodedMessage" else ""}")
+            } else {
+                Uri.parse("whatsapp://send${if (encodedMessage.isNotBlank()) "?text=$encodedMessage" else ""}")
+            }
+
+            val intent = Intent(Intent.ACTION_VIEW, waUri).apply {
+                setPackage("com.whatsapp")
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+
+            val canResolve = context.packageManager.resolveActivity(intent, 0) != null
+            if (canResolve) {
+                context.startActivity(intent)
+            } else {
+                // Try WhatsApp Business package
+                val intentW4b = Intent(Intent.ACTION_VIEW, waUri).apply {
+                    setPackage("com.whatsapp.w4b")
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                if (context.packageManager.resolveActivity(intentW4b, 0) != null) {
+                    context.startActivity(intentW4b)
+                } else {
+                    // Fallback to browser or generic handler
+                    val browserIntent = Intent(Intent.ACTION_VIEW, waUri).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    context.startActivity(browserIntent)
+                }
+            }
+
+            // Ensure background voice service stays listening
+            try {
+                com.example.service.VoiceAssistantService.start(context)
+            } catch (_: Exception) {}
+
+            val targetDesc = recipientName ?: cleanNumber
+            if (autoSend && !message.isNullOrBlank()) {
+                com.example.service.BwmAccessibilityService.scheduleWhatsAppSend(1400)
+                ToolExecutionResult(
+                    true,
+                    "WhatsApp par $targetDesc ko message bheja ja raha hai: \"$message\"",
+                    mapOf("recipient" to targetDesc, "message" to message, "autoSend" to true)
+                )
+            } else {
+                val actionDesc = if (!message.isNullOrBlank()) {
+                    "WhatsApp par $targetDesc ka chat open kar diya hai with message prefilled."
+                } else {
+                    "WhatsApp par $targetDesc ka chat khol diya hai."
+                }
+                ToolExecutionResult(
+                    true,
+                    actionDesc,
+                    mapOf("recipient" to targetDesc, "message" to (message ?: ""), "autoSend" to false)
+                )
+            }
+        } catch (e: Exception) {
+            ToolExecutionResult(false, "WhatsApp open karne me error: ${e.message}")
+        }
+    }
+
+    fun searchWhatsApp(query: String): ToolExecutionResult {
+        return try {
+            val waIntent = context.packageManager.getLaunchIntentForPackage("com.whatsapp")
+                ?: context.packageManager.getLaunchIntentForPackage("com.whatsapp.w4b")
+            if (waIntent != null) {
+                waIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                context.startActivity(waIntent)
+                com.example.service.BwmAccessibilityService.searchInWhatsApp(query)
+                ToolExecutionResult(true, "WhatsApp mein \"$query\" search kar rahe hain...")
+            } else {
+                ToolExecutionResult(false, "WhatsApp phone me install nahi mila.")
+            }
+        } catch (e: Exception) {
+            ToolExecutionResult(false, "WhatsApp search failed: ${e.message}")
+        }
+    }
+
+    fun controlActiveApp(action: String, parameter: String? = null): ToolExecutionResult {
+        val activePkg = com.example.service.BwmAccessibilityService.getActivePackage().lowercase()
+        return when (action.lowercase()) {
+            "scroll_down", "neeche_scroll", "scroll" -> {
+                val scrolled = com.example.service.BwmAccessibilityService.scrollActiveWindow(forward = true)
+                if (scrolled) {
+                    ToolExecutionResult(true, "Scrolled down.")
+                } else {
+                    ToolExecutionResult(false, "Could not scroll current screen.")
+                }
+            }
+            "scroll_up", "upar_scroll" -> {
+                val scrolled = com.example.service.BwmAccessibilityService.scrollActiveWindow(forward = false)
+                if (scrolled) {
+                    ToolExecutionResult(true, "Scrolled up.")
+                } else {
+                    ToolExecutionResult(false, "Could not scroll current screen.")
+                }
+            }
+            "pause", "roko" -> {
+                if (activePkg.contains("youtube")) {
+                    controlYouTube("pause")
+                } else {
+                    sendMediaKeyEvent(android.view.KeyEvent.KEYCODE_MEDIA_PAUSE)
+                    ToolExecutionResult(true, "Paused media.")
+                }
+            }
+            "play", "resume", "chalao" -> {
+                if (activePkg.contains("youtube")) {
+                    controlYouTube("play")
+                } else {
+                    sendMediaKeyEvent(android.view.KeyEvent.KEYCODE_MEDIA_PLAY)
+                    ToolExecutionResult(true, "Playing media.")
+                }
+            }
+            "next", "agla" -> {
+                if (activePkg.contains("youtube")) {
+                    controlYouTube("next")
+                } else {
+                    sendMediaKeyEvent(android.view.KeyEvent.KEYCODE_MEDIA_NEXT)
+                    ToolExecutionResult(true, "Skipped to next.")
+                }
+            }
+            "back", "peeche" -> {
+                val success = com.example.service.BwmAccessibilityService.performGlobal("back")
+                ToolExecutionResult(success, if (success) "Going back..." else "Failed to go back.")
+            }
+            "home" -> {
+                val success = com.example.service.BwmAccessibilityService.performGlobal("home")
+                ToolExecutionResult(success, if (success) "Home screen..." else "Failed to go home.")
+            }
+            "send", "bhejo" -> {
+                val clicked = com.example.service.BwmAccessibilityService.clickWhatsAppSendButton()
+                ToolExecutionResult(clicked, if (clicked) "Message sent." else "Could not find send button.")
+            }
+            else -> ToolExecutionResult(false, "Unsupported context action: $action")
+        }
+    }
+
     private fun sendMediaKeyEvent(keyCode: Int) {
         try {
             val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager

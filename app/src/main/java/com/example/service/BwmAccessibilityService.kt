@@ -5,6 +5,7 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -22,6 +23,9 @@ class BwmAccessibilityService : AccessibilityService() {
 
         private val _isServiceActive = MutableStateFlow(false)
         val isServiceActive: StateFlow<Boolean> = _isServiceActive.asStateFlow()
+
+        private val _currentForegroundPackage = MutableStateFlow<String>("")
+        val currentForegroundPackage: StateFlow<String> = _currentForegroundPackage.asStateFlow()
 
         private var instance: BwmAccessibilityService? = null
         private val mainHandler = Handler(Looper.getMainLooper())
@@ -47,6 +51,18 @@ class BwmAccessibilityService : AccessibilityService() {
             context.startActivity(intent)
         }
 
+        fun getActivePackage(): String {
+            val service = instance ?: return ""
+            val activeRoot = service.rootInActiveWindow
+            val rootPkg = activeRoot?.packageName?.toString() ?: ""
+            if (rootPkg.isNotBlank()) {
+                _currentForegroundPackage.value = rootPkg
+                return rootPkg
+            }
+            return _currentForegroundPackage.value
+        }
+
+        // --- GLOBAL SYSTEM ACTIONS ---
         fun performGlobal(action: String): Boolean {
             val service = instance ?: return false
             return when (action.lowercase()) {
@@ -64,6 +80,76 @@ class BwmAccessibilityService : AccessibilityService() {
             }
         }
 
+        // --- CONTEXT-AWARE SCROLLING ---
+        fun scrollActiveWindow(forward: Boolean = true): Boolean {
+            val service = instance ?: return false
+            val root = service.rootInActiveWindow ?: return false
+            return service.findAndScrollNode(root, forward)
+        }
+
+        // --- TEXT INPUT INTO ACTIVE WINDOW ---
+        fun typeTextIntoActiveField(text: String): Boolean {
+            val service = instance ?: return false
+            val root = service.rootInActiveWindow ?: return false
+            return service.findAndSetText(root, text)
+        }
+
+        // --- WHATSAPP SPECIFIC AUTOMATION ---
+        fun clickWhatsAppSendButton(): Boolean {
+            val service = instance ?: return false
+            val root = service.rootInActiveWindow ?: return false
+            return service.findAndClickWhatsAppSendNode(root)
+        }
+
+        fun scheduleWhatsAppSend(delayMs: Long = 1000, onComplete: ((Boolean) -> Unit)? = null) {
+            mainHandler.postDelayed({
+                val clicked = clickWhatsAppSendButton()
+                Log.d(TAG, "WhatsApp Send click result: $clicked")
+                if (!clicked) {
+                    mainHandler.postDelayed({
+                        val retryClicked = clickWhatsAppSendButton()
+                        Log.d(TAG, "WhatsApp Send retry click result: $retryClicked")
+                        onComplete?.invoke(retryClicked)
+                    }, 1000)
+                } else {
+                    onComplete?.invoke(true)
+                }
+            }, delayMs)
+        }
+
+        fun scheduleWhatsAppTypeAndSend(
+            message: String,
+            autoSend: Boolean,
+            delayMs: Long = 1200,
+            onComplete: ((Boolean) -> Unit)? = null
+        ) {
+            mainHandler.postDelayed({
+                val typed = typeTextIntoActiveField(message)
+                Log.d(TAG, "Typed WhatsApp message: $typed")
+                if (autoSend) {
+                    scheduleWhatsAppSend(delayMs = 600, onComplete = onComplete)
+                } else {
+                    onComplete?.invoke(typed)
+                }
+            }, delayMs)
+        }
+
+        fun searchInWhatsApp(query: String): Boolean {
+            val service = instance ?: return false
+            val root = service.rootInActiveWindow ?: return false
+            // 1. Click search icon
+            val searchClicked = service.findAndClickNodeByCandidate(root, listOf("search", "menuitem_search", "खोजें"))
+            if (searchClicked) {
+                mainHandler.postDelayed({
+                    val activeRoot = service.rootInActiveWindow ?: return@postDelayed
+                    service.findAndSetText(activeRoot, query)
+                }, 500)
+                return true
+            }
+            return false
+        }
+
+        // --- YOUTUBE SPECIFIC AUTOMATION ---
         fun clickFirstVideoResult(): Boolean {
             val service = instance ?: return false
             val root = service.rootInActiveWindow ?: return false
@@ -103,7 +189,8 @@ class BwmAccessibilityService : AccessibilityService() {
         val info = serviceInfo ?: AccessibilityServiceInfo()
         info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
                 AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
-                AccessibilityEvent.TYPE_VIEW_CLICKED
+                AccessibilityEvent.TYPE_VIEW_CLICKED or
+                AccessibilityEvent.TYPE_VIEW_SCROLLED
         info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
         info.flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
                 AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
@@ -111,7 +198,17 @@ class BwmAccessibilityService : AccessibilityService() {
         Log.i(TAG, "BWM Accessibility Service connected successfully")
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event == null) return
+
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            val pkg = event.packageName?.toString() ?: ""
+            if (pkg.isNotBlank() && pkg != packageName && !pkg.contains("systemui", ignoreCase = true)) {
+                _currentForegroundPackage.value = pkg
+                Log.d(TAG, "Foreground app switched to: $pkg")
+            }
+        }
+    }
 
     override fun onInterrupt() {
         Log.w(TAG, "BWM Accessibility Service interrupted")
@@ -121,6 +218,138 @@ class BwmAccessibilityService : AccessibilityService() {
         super.onDestroy()
         instance = null
         _isServiceActive.value = false
+    }
+
+    // --- RECURSIVE NODE TRAVERSAL HELPERS ---
+
+    private fun findAndScrollNode(node: AccessibilityNodeInfo, forward: Boolean, depth: Int = 0): Boolean {
+        if (depth > 20) return false
+
+        if (node.isScrollable) {
+            val action = if (forward) {
+                AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+            } else {
+                AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+            }
+            val scrolled = node.performAction(action)
+            if (scrolled) {
+                Log.i(TAG, "Scrolled node successfully (forward=$forward)")
+                return true
+            }
+        }
+
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            if (findAndScrollNode(child, forward, depth + 1)) return true
+        }
+        return false
+    }
+
+    private fun findAndSetText(node: AccessibilityNodeInfo, text: String, depth: Int = 0): Boolean {
+        if (depth > 20) return false
+
+        val viewId = node.viewIdResourceName ?: ""
+        val className = node.className?.toString() ?: ""
+        val isTargetField = node.isEditable ||
+                className.contains("EditText", ignoreCase = true) ||
+                viewId.contains("entry", ignoreCase = true) ||
+                viewId.contains("message", ignoreCase = true) ||
+                viewId.contains("search_src_text", ignoreCase = true)
+
+        if (isTargetField) {
+            node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            val arguments = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            }
+            val success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+            if (success) {
+                Log.i(TAG, "Successfully entered text '$text' into node (id=$viewId)")
+                return true
+            }
+        }
+
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            if (findAndSetText(child, text, depth + 1)) return true
+        }
+        return false
+    }
+
+    private fun findAndClickWhatsAppSendNode(node: AccessibilityNodeInfo, depth: Int = 0): Boolean {
+        if (depth > 25) return false
+
+        val viewId = node.viewIdResourceName ?: ""
+        val desc = node.contentDescription?.toString() ?: ""
+        val text = node.text?.toString() ?: ""
+
+        val isSendCandidate = viewId.contains("send", ignoreCase = true) ||
+                desc.equals("send", ignoreCase = true) ||
+                desc.contains("भेजें", ignoreCase = true) ||
+                desc.contains("send message", ignoreCase = true) ||
+                text.equals("send", ignoreCase = true)
+
+        if (isSendCandidate && node.isClickable) {
+            val clicked = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            if (clicked) {
+                Log.i(TAG, "Clicked WhatsApp Send button (id=$viewId, desc=$desc)")
+                return true
+            }
+        }
+
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            if (findAndClickWhatsAppSendNode(child, depth + 1)) return true
+        }
+
+        if (isSendCandidate) {
+            var parent = node.parent
+            while (parent != null) {
+                if (parent.isClickable) {
+                    val clicked = parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    if (clicked) return true
+                }
+                parent = parent.parent
+            }
+        }
+
+        return false
+    }
+
+    private fun findAndClickNodeByCandidate(
+        node: AccessibilityNodeInfo,
+        keywords: List<String>,
+        depth: Int = 0
+    ): Boolean {
+        if (depth > 20) return false
+
+        val viewId = (node.viewIdResourceName ?: "").lowercase()
+        val desc = (node.contentDescription?.toString() ?: "").lowercase()
+        val text = (node.text?.toString() ?: "").lowercase()
+
+        val matches = keywords.any { kw ->
+            viewId.contains(kw) || desc.contains(kw) || text.contains(kw)
+        }
+
+        if (matches && node.isClickable) {
+            return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        }
+
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            if (findAndClickNodeByCandidate(child, keywords, depth + 1)) return true
+        }
+
+        if (matches) {
+            var parent = node.parent
+            while (parent != null) {
+                if (parent.isClickable) {
+                    return parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                }
+                parent = parent.parent
+            }
+        }
+
+        return false
     }
 
     private fun findAndClickFirstVideoNode(node: AccessibilityNodeInfo, depth: Int = 0): Boolean {

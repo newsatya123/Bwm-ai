@@ -10,9 +10,12 @@ import com.example.data.local.AssistantDatabase
 import com.example.data.local.AssistantLogoTheme
 import com.example.data.local.ConversationMessage
 import com.example.data.local.NoteItem
+import com.example.data.local.SttProvider
 import com.example.data.remote.GeminiAssistantAgent
 import com.example.data.remote.ToolActionRequest
 import com.example.engine.actions.AppLauncher
+import com.example.engine.actions.ContactInfo
+import com.example.engine.actions.ContactsManager
 import com.example.engine.actions.DeviceController
 import com.example.engine.actions.InstalledAppInfo
 import com.example.engine.voice.ModularWakeWordEngine
@@ -43,7 +46,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val logoTheme: StateFlow<AssistantLogoTheme> = settingsManager.logoTheme
     val isContinuousListening: StateFlow<Boolean> = settingsManager.isContinuousListening
     val autoBackgroundListening: StateFlow<Boolean> = settingsManager.autoBackgroundListeningOnAppLaunch
+    val isWakeWordEnabled: StateFlow<Boolean> = settingsManager.isWakeWordEnabled
+    val micSensitivity: StateFlow<Float> = settingsManager.micSensitivity
+    val sttProvider: StateFlow<SttProvider> = settingsManager.sttProvider
+    val isWhatsappDirectSend: StateFlow<Boolean> = settingsManager.isWhatsappDirectSend
 
+    val contactsManager = ContactsManager(context)
     val appLauncher = AppLauncher(context)
     val deviceController = DeviceController(context)
     val ttsManager = TextToSpeechManager(context)
@@ -63,9 +71,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val audioRmsDb: StateFlow<Float> = _audioRmsDb.asStateFlow()
 
     val selectedLanguage = MutableStateFlow("en-IN")
-
-    private val _isWakeWordEnabled = MutableStateFlow(true)
-    val isWakeWordEnabled: StateFlow<Boolean> = _isWakeWordEnabled.asStateFlow()
 
     private val _pendingConfirmation = MutableStateFlow<ConfirmationDialogData?>(null)
     val pendingConfirmation: StateFlow<ConfirmationDialogData?> = _pendingConfirmation.asStateFlow()
@@ -93,6 +98,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         initSpeechRecognizer()
         refreshApps()
         startWakeWordEngineIfEnabled()
+
+        viewModelScope.launch {
+            micSensitivity.collect { sens ->
+                wakeWordEngine.setSensitivity(sens)
+            }
+        }
+
+        viewModelScope.launch {
+            sttProvider.collect { prov ->
+                speechRecognizerManager?.sttProvider = prov
+            }
+        }
 
         // Track TTS state to reset assistant or continue listening seamlessly
         viewModelScope.launch {
@@ -168,7 +185,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun startWakeWordEngineIfEnabled() {
-        if (_isWakeWordEnabled.value && (_uiState.value == AssistantUiState.IDLE || _uiState.value == AssistantUiState.LISTENING_FOR_WAKE_WORD)) {
+        if (isWakeWordEnabled.value && (_uiState.value == AssistantUiState.IDLE || _uiState.value == AssistantUiState.LISTENING_FOR_WAKE_WORD)) {
             _uiState.value = AssistantUiState.LISTENING_FOR_WAKE_WORD
             wakeWordEngine.setCustomAssistantName(assistantName.value)
             wakeWordEngine.start { attachedCommand ->
@@ -185,7 +202,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun toggleWakeWord(enabled: Boolean) {
-        _isWakeWordEnabled.value = enabled
+        settingsManager.setWakeWordEnabled(enabled)
         if (enabled) {
             startWakeWordEngineIfEnabled()
             _currentStatusMessage.value = "Wake-word enabled ('Hey ${assistantName.value}')"
@@ -194,6 +211,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.value = AssistantUiState.IDLE
             _currentStatusMessage.value = "Wake-word disabled"
         }
+    }
+
+    fun setMicSensitivity(sensitivity: Float) {
+        settingsManager.setMicSensitivity(sensitivity)
+    }
+
+    fun setSttProvider(provider: SttProvider) {
+        settingsManager.setSttProvider(provider)
+    }
+
+    fun setWhatsappDirectSend(enabled: Boolean) {
+        settingsManager.setWhatsappDirectSend(enabled)
     }
 
     fun triggerHeyBwmTest() {
@@ -281,7 +310,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 geminiAgent.processCommand(query, historyPairs)
             }
 
-            if (agentResponse.requiresConfirmation && agentResponse.toolActions.isNotEmpty()) {
+            val shouldSkipConfirmation = agentResponse.toolActions.all { action ->
+                action is ToolActionRequest.WhatsAppSend && (action.directSend || isWhatsappDirectSend.value)
+            }
+
+            if (agentResponse.requiresConfirmation && !shouldSkipConfirmation && agentResponse.toolActions.isNotEmpty()) {
                 _uiState.value = AssistantUiState.IDLE
                 _pendingConfirmation.value = ConfirmationDialogData(
                     title = "Confirm Action",
@@ -447,6 +480,87 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 dao.insertActionLog(ActionLogItem(toolName = "DeviceNavigation", parameters = action.action, result = msg, isSuccess = success))
                 Triple(success, msg, msg)
+            }
+            is ToolActionRequest.WhatsAppSend -> {
+                val isDirect = action.directSend || isWhatsappDirectSend.value
+                val cleanRecipient = action.recipient.trim()
+
+                // Check if recipient is already a raw phone number (digits)
+                val isRawNumber = cleanRecipient.replace(Regex("[^0-9]"), "").length >= 7
+                if (isRawNumber) {
+                    val res = deviceController.openWhatsAppChat(
+                        phoneNumber = cleanRecipient,
+                        message = action.message,
+                        autoSend = isDirect,
+                        recipientName = cleanRecipient
+                    )
+                    dao.insertActionLog(ActionLogItem(toolName = "WhatsAppSend", parameters = "$cleanRecipient: ${action.message}", result = res.message, isSuccess = res.isSuccess))
+                    Triple(res.isSuccess, res.message, res.message)
+                } else {
+                    if (!contactsManager.hasContactsPermission()) {
+                        val errMsg = "Contacts permission needed to find \"$cleanRecipient\". Kripya Settings se Contacts permission allow karein."
+                        dao.insertActionLog(ActionLogItem(toolName = "WhatsAppSend", parameters = cleanRecipient, result = errMsg, isSuccess = false))
+                        Triple(false, errMsg, errMsg)
+                    } else {
+                        val matches = contactsManager.searchContacts(cleanRecipient)
+                        if (matches.isEmpty()) {
+                            val res = deviceController.openWhatsAppChat(
+                                phoneNumber = "",
+                                message = action.message,
+                                autoSend = false,
+                                recipientName = cleanRecipient
+                            )
+                            val msg = "Contact \"$cleanRecipient\" phone me nahi mila. WhatsApp khol kar message prefill kar diya hai."
+                            dao.insertActionLog(ActionLogItem(toolName = "WhatsAppSend", parameters = cleanRecipient, result = msg, isSuccess = true))
+                            Triple(true, msg, msg)
+                        } else {
+                            val selected = matches.first()
+                            val res = deviceController.openWhatsAppChat(
+                                phoneNumber = selected.normalizedNumber,
+                                message = action.message,
+                                autoSend = isDirect,
+                                recipientName = selected.name
+                            )
+                            val ambiguityNote = if (matches.size > 1) " (Multiple matches, selected ${selected.name})" else ""
+                            val finalMsg = "${res.message}$ambiguityNote"
+                            dao.insertActionLog(ActionLogItem(toolName = "WhatsAppSend", parameters = "${selected.name}: ${action.message}", result = finalMsg, isSuccess = res.isSuccess))
+                            Triple(res.isSuccess, finalMsg, finalMsg)
+                        }
+                    }
+                }
+            }
+            is ToolActionRequest.WhatsAppOpenChat -> {
+                val cleanRecipient = action.recipient.trim()
+                val isRawNumber = cleanRecipient.replace(Regex("[^0-9]"), "").length >= 7
+                if (isRawNumber) {
+                    val res = deviceController.openWhatsAppChat(cleanRecipient, null, false, cleanRecipient)
+                    dao.insertActionLog(ActionLogItem(toolName = "WhatsAppOpenChat", parameters = cleanRecipient, result = res.message, isSuccess = res.isSuccess))
+                    Triple(res.isSuccess, res.message, res.message)
+                } else if (!contactsManager.hasContactsPermission()) {
+                    val errMsg = "Contacts permission needed to find \"$cleanRecipient\". Kripya Settings se Contacts allow karein."
+                    Triple(false, errMsg, errMsg)
+                } else {
+                    val matches = contactsManager.searchContacts(cleanRecipient)
+                    if (matches.isEmpty()) {
+                        val res = deviceController.searchWhatsApp(cleanRecipient)
+                        Triple(res.isSuccess, res.message, res.message)
+                    } else {
+                        val selected = matches.first()
+                        val res = deviceController.openWhatsAppChat(selected.normalizedNumber, null, false, selected.name)
+                        dao.insertActionLog(ActionLogItem(toolName = "WhatsAppOpenChat", parameters = selected.name, result = res.message, isSuccess = res.isSuccess))
+                        Triple(res.isSuccess, res.message, res.message)
+                    }
+                }
+            }
+            is ToolActionRequest.WhatsAppSearch -> {
+                val res = deviceController.searchWhatsApp(action.query)
+                dao.insertActionLog(ActionLogItem(toolName = "WhatsAppSearch", parameters = action.query, result = res.message, isSuccess = res.isSuccess))
+                Triple(res.isSuccess, res.message, res.message)
+            }
+            is ToolActionRequest.ActiveAppContextAction -> {
+                val res = deviceController.controlActiveApp(action.action, action.parameter)
+                dao.insertActionLog(ActionLogItem(toolName = "ActiveAppContextAction", parameters = "${action.action} (${action.parameter ?: ""})", result = res.message, isSuccess = res.isSuccess))
+                Triple(res.isSuccess, res.message, res.message)
             }
         }
     }
