@@ -74,6 +74,8 @@ class SpeechRecognizerManager(
                 setRecognitionListener(createListener())
             }
 
+            var hasDispatchedResult = false
+
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, currentLanguageCode)
@@ -81,6 +83,9 @@ class SpeechRecognizerManager(
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
                 putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf("hi-IN", "en-IN", "en-US"))
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 3000L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
 
                 if (sttProvider == SttProvider.OFFLINE_HYBRID) {
                     putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
@@ -112,7 +117,10 @@ class SpeechRecognizerManager(
         stopListening()
     }
 
+    private var hasDispatchedResult = false
+
     private fun createListener(): RecognitionListener {
+        hasDispatchedResult = false
         return object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {
                 _recognitionState.value = SpeechRecognitionState.Listening
@@ -153,6 +161,8 @@ class SpeechRecognizerManager(
 
             override fun onResults(results: Bundle?) {
                 _audioRmsDb.value = 0f
+                if (hasDispatchedResult) return
+
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 var recognizedText = matches?.firstOrNull()?.trim() ?: ""
 
@@ -162,6 +172,7 @@ class SpeechRecognizerManager(
                 }
 
                 if (recognizedText.isNotBlank()) {
+                    hasDispatchedResult = true
                     _recognitionState.value = SpeechRecognitionState.FinalResult(recognizedText)
                     onResultReceived(recognizedText)
                 } else {

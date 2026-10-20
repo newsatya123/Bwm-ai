@@ -117,7 +117,7 @@ class AppLauncher(private val context: Context) {
                 } catch (_: Exception) {}
 
                 val displayName = appName ?: packageName
-                ToolExecutionResult(true, "Launching $displayName (BWM Assistant active in background)...", mapOf("packageName" to packageName))
+                ToolExecutionResult(true, "Sir, $displayName open kar diya gaya hai.", mapOf("packageName" to packageName))
             } else {
                 ToolExecutionResult(false, "Cannot launch package '$packageName' (no launcher activity).")
             }

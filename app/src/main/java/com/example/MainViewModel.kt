@@ -18,6 +18,7 @@ import com.example.engine.actions.ContactInfo
 import com.example.engine.actions.ContactsManager
 import com.example.engine.actions.DeviceController
 import com.example.engine.actions.InstalledAppInfo
+import com.example.engine.tasks.TaskQueueManager
 import com.example.engine.voice.ModularWakeWordEngine
 import com.example.engine.voice.SpeechRecognitionState
 import com.example.engine.voice.SpeechRecognizerManager
@@ -51,11 +52,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val sttProvider: StateFlow<SttProvider> = settingsManager.sttProvider
     val isWhatsappDirectSend: StateFlow<Boolean> = settingsManager.isWhatsappDirectSend
 
+    val voiceGender: StateFlow<String> = settingsManager.voiceGender
+    val speechRate: StateFlow<Float> = settingsManager.speechRate
+    val speechPitch: StateFlow<Float> = settingsManager.speechPitch
+    val spokenConfirmation: StateFlow<Boolean> = settingsManager.spokenConfirmation
+
     val contactsManager = ContactsManager(context)
     val appLauncher = AppLauncher(context)
     val deviceController = DeviceController(context)
     val ttsManager = TextToSpeechManager(context)
     private val geminiAgent = GeminiAssistantAgent()
+
+    val taskQueueManager = TaskQueueManager(viewModelScope) { action, onConfirm ->
+        val (_, _, spoken) = performToolAction(action)
+        spoken
+    }
 
     // State flows
     private val _uiState = MutableStateFlow(AssistantUiState.IDLE)
@@ -74,6 +85,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _pendingConfirmation = MutableStateFlow<ConfirmationDialogData?>(null)
     val pendingConfirmation: StateFlow<ConfirmationDialogData?> = _pendingConfirmation.asStateFlow()
+
+    private val _pendingContactChoice = MutableStateFlow<ContactDisambiguationData?>(null)
+    val pendingContactChoice: StateFlow<ContactDisambiguationData?> = _pendingContactChoice.asStateFlow()
 
     // Database flows
     val messages: StateFlow<List<ConversationMessage>> = dao.getAllMessages()
@@ -111,6 +125,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        ttsManager.preferredGender = settingsManager.voiceGender.value
+        ttsManager.speechRate = settingsManager.speechRate.value
+        ttsManager.speechPitch = settingsManager.speechPitch.value
+        ttsManager.applyVoicePreferences()
+
         // Track TTS state to reset assistant or continue listening seamlessly
         viewModelScope.launch {
             ttsManager.isSpeaking.collect { isSpeaking ->
@@ -127,6 +146,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+    }
+
+    fun setVoiceGender(gender: String) {
+        settingsManager.setVoiceGender(gender)
+        ttsManager.preferredGender = gender
+        ttsManager.applyVoicePreferences()
+    }
+
+    fun setSpeechRate(rate: Float) {
+        settingsManager.setSpeechRate(rate)
+        ttsManager.speechRate = rate
+    }
+
+    fun setSpeechPitch(pitch: Float) {
+        settingsManager.setSpeechPitch(pitch)
+        ttsManager.speechPitch = pitch
+    }
+
+    fun setSpokenConfirmation(enabled: Boolean) {
+        settingsManager.setSpokenConfirmation(enabled)
+    }
+
+    fun previewVoice() {
+        ttsManager.previewVoice("Sir, BWM Jarvis voice synthesis is operational and standing by.")
     }
 
     private fun initSpeechRecognizer() {
@@ -315,17 +358,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             if (agentResponse.requiresConfirmation && !shouldSkipConfirmation && agentResponse.toolActions.isNotEmpty()) {
-                _uiState.value = AssistantUiState.IDLE
+                _uiState.value = AssistantUiState.WAITING_FOR_CONFIRMATION
+                val promptText = agentResponse.confirmationPrompt ?: "Sir, kya aap is action ke sath proceed karna chahte hain?"
+                _currentStatusMessage.value = promptText
+                if (spokenConfirmation.value) {
+                    val spokenPrompt = if (agentResponse.toolActions.any { it is ToolActionRequest.WhatsAppSend }) {
+                        "Sir, message bhejne se pehle confirmation chahiye."
+                    } else {
+                        promptText
+                    }
+                    ttsManager.speak(spokenPrompt)
+                }
                 _pendingConfirmation.value = ConfirmationDialogData(
                     title = "Confirm Action",
-                    message = agentResponse.confirmationPrompt ?: "Are you sure you want to proceed with this action?",
+                    message = promptText,
                     onConfirm = {
                         _pendingConfirmation.value = null
                         executeActionsAndRespond(agentResponse.toolActions, agentResponse.responseText)
                     },
                     onCancel = {
                         _pendingConfirmation.value = null
-                        val cancelMsg = "Action cancelled."
+                        _uiState.value = AssistantUiState.IDLE
+                        val cancelMsg = "Sir, action cancel kar diya gaya hai."
                         viewModelScope.launch {
                             dao.insertMessage(ConversationMessage(role = "assistant", content = cancelMsg))
                             ttsManager.speak(cancelMsg)
@@ -361,6 +415,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
+            if (actions.size > 1) {
+                taskQueueManager.enqueueTasks(actions)
+            }
             _uiState.value = AssistantUiState.EXECUTING
             val speechResults = mutableListOf<String>()
             val detailsList = mutableListOf<String>()
@@ -452,9 +509,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 Triple(true, msg, msg)
             }
             is ToolActionRequest.DialPhone -> {
-                val res = deviceController.openDialer(action.phoneNumber)
-                dao.insertActionLog(ActionLogItem(toolName = "DialPhone", parameters = action.phoneNumber, result = res.message, isSuccess = res.isSuccess))
-                Triple(res.isSuccess, res.message, res.message)
+                if (!action.contactName.isNullOrBlank() && contactsManager.hasContactsPermission()) {
+                    val matches = contactsManager.searchContacts(action.contactName)
+                    if (matches.size > 1) {
+                        val promptMsg = "Sir, ${action.contactName} naam ke ${matches.size} contacts mile hain. Kisko call karun?"
+                        withContext(Dispatchers.Main) {
+                            _uiState.value = AssistantUiState.WAITING_FOR_CONFIRMATION
+                            _currentStatusMessage.value = promptMsg
+                            ttsManager.speak(promptMsg)
+                            _pendingContactChoice.value = ContactDisambiguationData(
+                                title = "Select Contact to Call",
+                                prompt = promptMsg,
+                                contacts = matches,
+                                onContactChosen = { chosen ->
+                                    _pendingContactChoice.value = null
+                                    viewModelScope.launch {
+                                        val res = deviceController.openDialer(chosen.normalizedNumber)
+                                        val label = "${chosen.name} (${chosen.normalizedNumber})"
+                                        dao.insertActionLog(ActionLogItem(toolName = "DialPhone", parameters = label, result = res.message, isSuccess = res.isSuccess))
+                                        onAssistantFinished(
+                                            displayText = res.message,
+                                            spokenText = res.message,
+                                            actionType = "DialPhone",
+                                            actionDetail = label,
+                                            isSuccess = res.isSuccess
+                                        )
+                                    }
+                                },
+                                onDismiss = {
+                                    _pendingContactChoice.value = null
+                                    _uiState.value = AssistantUiState.IDLE
+                                }
+                            )
+                        }
+                        Triple(true, promptMsg, promptMsg)
+                    } else {
+                        val targetNumber = if (matches.isNotEmpty()) matches.first().normalizedNumber else action.phoneNumber
+                        val res = deviceController.openDialer(targetNumber)
+                        val label = "${action.contactName} ($targetNumber)"
+                        dao.insertActionLog(ActionLogItem(toolName = "DialPhone", parameters = label, result = res.message, isSuccess = res.isSuccess))
+                        Triple(res.isSuccess, res.message, res.message)
+                    }
+                } else {
+                    val res = deviceController.openDialer(action.phoneNumber)
+                    dao.insertActionLog(ActionLogItem(toolName = "DialPhone", parameters = action.phoneNumber, result = res.message, isSuccess = res.isSuccess))
+                    Triple(res.isSuccess, res.message, res.message)
+                }
             }
             is ToolActionRequest.OpenUrl -> {
                 val res = deviceController.openUrl(action.url)
@@ -474,7 +574,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             is ToolActionRequest.DeviceNavigation -> {
                 val success = BwmAccessibilityService.performGlobal(action.action)
                 val msg = if (success) {
-                    "Performed ${action.action} navigation"
+                    "Sir, performed ${action.action} navigation"
                 } else {
                     "To navigate automatically, please enable BWM AI in Accessibility Settings."
                 }
@@ -498,7 +598,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     Triple(res.isSuccess, res.message, res.message)
                 } else {
                     if (!contactsManager.hasContactsPermission()) {
-                        val errMsg = "Contacts permission needed to find \"$cleanRecipient\". Kripya Settings se Contacts permission allow karein."
+                        val errMsg = "Sir, Contacts permission needed to find \"$cleanRecipient\". Kripya Settings se Contacts permission allow karein."
                         dao.insertActionLog(ActionLogItem(toolName = "WhatsAppSend", parameters = cleanRecipient, result = errMsg, isSuccess = false))
                         Triple(false, errMsg, errMsg)
                     } else {
@@ -510,9 +610,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 autoSend = false,
                                 recipientName = cleanRecipient
                             )
-                            val msg = "Contact \"$cleanRecipient\" phone me nahi mila. WhatsApp khol kar message prefill kar diya hai."
+                            val msg = "Sir, contact \"$cleanRecipient\" phone me nahi mila. WhatsApp khol kar message prefill kar diya hai."
                             dao.insertActionLog(ActionLogItem(toolName = "WhatsAppSend", parameters = cleanRecipient, result = msg, isSuccess = true))
                             Triple(true, msg, msg)
+                        } else if (matches.size > 1) {
+                            val promptMsg = "Sir, $cleanRecipient naam ke ${matches.size} contacts mile hain. Kise select karna hai?"
+                            withContext(Dispatchers.Main) {
+                                _uiState.value = AssistantUiState.WAITING_FOR_CONFIRMATION
+                                _currentStatusMessage.value = promptMsg
+                                ttsManager.speak(promptMsg)
+                                _pendingContactChoice.value = ContactDisambiguationData(
+                                    title = "Multiple Contacts Found",
+                                    prompt = promptMsg,
+                                    contacts = matches,
+                                    onContactChosen = { chosen ->
+                                        _pendingContactChoice.value = null
+                                        viewModelScope.launch {
+                                            val res = deviceController.openWhatsAppChat(
+                                                phoneNumber = chosen.normalizedNumber,
+                                                message = action.message,
+                                                autoSend = isDirect,
+                                                recipientName = chosen.name
+                                            )
+                                            dao.insertActionLog(ActionLogItem(toolName = "WhatsAppSend", parameters = "${chosen.name}: ${action.message}", result = res.message, isSuccess = res.isSuccess))
+                                            onAssistantFinished(
+                                                displayText = res.message,
+                                                spokenText = res.message,
+                                                actionType = "WhatsAppSend",
+                                                actionDetail = "${chosen.name}: ${action.message}",
+                                                isSuccess = res.isSuccess
+                                            )
+                                        }
+                                    },
+                                    onDismiss = {
+                                        _pendingContactChoice.value = null
+                                        _uiState.value = AssistantUiState.IDLE
+                                    }
+                                )
+                            }
+                            Triple(true, promptMsg, promptMsg)
                         } else {
                             val selected = matches.first()
                             val res = deviceController.openWhatsAppChat(
@@ -521,10 +657,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 autoSend = isDirect,
                                 recipientName = selected.name
                             )
-                            val ambiguityNote = if (matches.size > 1) " (Multiple matches, selected ${selected.name})" else ""
-                            val finalMsg = "${res.message}$ambiguityNote"
-                            dao.insertActionLog(ActionLogItem(toolName = "WhatsAppSend", parameters = "${selected.name}: ${action.message}", result = finalMsg, isSuccess = res.isSuccess))
-                            Triple(res.isSuccess, finalMsg, finalMsg)
+                            dao.insertActionLog(ActionLogItem(toolName = "WhatsAppSend", parameters = "${selected.name}: ${action.message}", result = res.message, isSuccess = res.isSuccess))
+                            Triple(res.isSuccess, res.message, res.message)
                         }
                     }
                 }
@@ -537,13 +671,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     dao.insertActionLog(ActionLogItem(toolName = "WhatsAppOpenChat", parameters = cleanRecipient, result = res.message, isSuccess = res.isSuccess))
                     Triple(res.isSuccess, res.message, res.message)
                 } else if (!contactsManager.hasContactsPermission()) {
-                    val errMsg = "Contacts permission needed to find \"$cleanRecipient\". Kripya Settings se Contacts allow karein."
+                    val errMsg = "Sir, Contacts permission needed to find \"$cleanRecipient\". Kripya Settings se Contacts allow karein."
                     Triple(false, errMsg, errMsg)
                 } else {
                     val matches = contactsManager.searchContacts(cleanRecipient)
                     if (matches.isEmpty()) {
                         val res = deviceController.searchWhatsApp(cleanRecipient)
                         Triple(res.isSuccess, res.message, res.message)
+                    } else if (matches.size > 1) {
+                        val promptMsg = "Sir, $cleanRecipient naam ke ${matches.size} contacts mile hain. Kiska chat open karun?"
+                        withContext(Dispatchers.Main) {
+                            _uiState.value = AssistantUiState.WAITING_FOR_CONFIRMATION
+                            _currentStatusMessage.value = promptMsg
+                            ttsManager.speak(promptMsg)
+                            _pendingContactChoice.value = ContactDisambiguationData(
+                                title = "Select Contact Chat",
+                                prompt = promptMsg,
+                                contacts = matches,
+                                onContactChosen = { chosen ->
+                                    _pendingContactChoice.value = null
+                                    viewModelScope.launch {
+                                        val res = deviceController.openWhatsAppChat(chosen.normalizedNumber, null, false, chosen.name)
+                                        dao.insertActionLog(ActionLogItem(toolName = "WhatsAppOpenChat", parameters = chosen.name, result = res.message, isSuccess = res.isSuccess))
+                                        onAssistantFinished(
+                                            displayText = res.message,
+                                            spokenText = res.message,
+                                            actionType = "WhatsAppOpenChat",
+                                            actionDetail = chosen.name,
+                                            isSuccess = res.isSuccess
+                                        )
+                                    }
+                                },
+                                onDismiss = {
+                                    _pendingContactChoice.value = null
+                                    _uiState.value = AssistantUiState.IDLE
+                                }
+                            )
+                        }
+                        Triple(true, promptMsg, promptMsg)
                     } else {
                         val selected = matches.first()
                         val res = deviceController.openWhatsAppChat(selected.normalizedNumber, null, false, selected.name)
@@ -560,6 +725,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             is ToolActionRequest.ActiveAppContextAction -> {
                 val res = deviceController.controlActiveApp(action.action, action.parameter)
                 dao.insertActionLog(ActionLogItem(toolName = "ActiveAppContextAction", parameters = "${action.action} (${action.parameter ?: ""})", result = res.message, isSuccess = res.isSuccess))
+                Triple(res.isSuccess, res.message, res.message)
+            }
+            is ToolActionRequest.PlayStoreSearch -> {
+                val res = deviceController.openPlayStore(action.appName)
+                dao.insertActionLog(ActionLogItem(toolName = "PlayStoreSearch", parameters = action.appName, result = res.message, isSuccess = res.isSuccess))
+                Triple(res.isSuccess, res.message, res.message)
+            }
+            is ToolActionRequest.OpenRecentCalls -> {
+                val res = deviceController.openRecentCalls()
+                dao.insertActionLog(ActionLogItem(toolName = "OpenRecentCalls", parameters = "", result = res.message, isSuccess = res.isSuccess))
+                Triple(res.isSuccess, res.message, res.message)
+            }
+            is ToolActionRequest.QueueControl -> {
+                val msg = when (action.command.lowercase()) {
+                    "pause" -> taskQueueManager.pauseQueue()
+                    "resume" -> taskQueueManager.resumeQueue()
+                    "cancel" -> taskQueueManager.cancelCurrentTask()
+                    "skip" -> taskQueueManager.skipCurrentTask()
+                    "status" -> taskQueueManager.getCurrentStatusSummary()
+                    else -> "Queue command: ${action.command}"
+                }
+                Triple(true, msg, msg)
+            }
+            is ToolActionRequest.QueryActiveApp -> {
+                val res = deviceController.getActiveAppSummary()
                 Triple(res.isSuccess, res.message, res.message)
             }
         }

@@ -15,7 +15,18 @@ data class ContactInfo(
     val phoneNumber: String,
     val normalizedNumber: String,
     val photoUri: String? = null
-)
+) {
+    fun getMaskedNumber(): String {
+        val digits = normalizedNumber.filter { it.isDigit() }
+        return if (digits.length > 4) {
+            val last4 = digits.takeLast(4)
+            val prefix = if (normalizedNumber.startsWith("+")) "+•• " else "•• "
+            "$prefix•••• $last4"
+        } else {
+            normalizedNumber
+        }
+    }
+}
 
 class ContactsManager(private val context: Context) {
 

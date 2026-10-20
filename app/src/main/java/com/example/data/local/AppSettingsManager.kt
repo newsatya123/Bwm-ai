@@ -116,6 +116,18 @@ class AppSettingsManager(context: Context) {
     private val _isWhatsappDirectSend = MutableStateFlow(prefs.getBoolean("whatsapp_direct_send", false))
     val isWhatsappDirectSend: StateFlow<Boolean> = _isWhatsappDirectSend.asStateFlow()
 
+    private val _voiceGender = MutableStateFlow(prefs.getString("voice_gender", "male") ?: "male")
+    val voiceGender: StateFlow<String> = _voiceGender.asStateFlow()
+
+    private val _speechRate = MutableStateFlow(prefs.getFloat("speech_rate", 1.0f))
+    val speechRate: StateFlow<Float> = _speechRate.asStateFlow()
+
+    private val _speechPitch = MutableStateFlow(prefs.getFloat("speech_pitch", 0.9f))
+    val speechPitch: StateFlow<Float> = _speechPitch.asStateFlow()
+
+    private val _spokenConfirmation = MutableStateFlow(prefs.getBoolean("spoken_confirmation", true))
+    val spokenConfirmation: StateFlow<Boolean> = _spokenConfirmation.asStateFlow()
+
     fun setAssistantName(name: String) {
         val clean = name.trim().ifBlank { "BWM AI" }
         prefs.edit().putString("assistant_name", clean).apply()
@@ -156,5 +168,27 @@ class AppSettingsManager(context: Context) {
     fun setWhatsappDirectSend(enabled: Boolean) {
         prefs.edit().putBoolean("whatsapp_direct_send", enabled).apply()
         _isWhatsappDirectSend.value = enabled
+    }
+
+    fun setVoiceGender(gender: String) {
+        prefs.edit().putString("voice_gender", gender).apply()
+        _voiceGender.value = gender
+    }
+
+    fun setSpeechRate(rate: Float) {
+        val clamped = rate.coerceIn(0.5f, 2.0f)
+        prefs.edit().putFloat("speech_rate", clamped).apply()
+        _speechRate.value = clamped
+    }
+
+    fun setSpeechPitch(pitch: Float) {
+        val clamped = pitch.coerceIn(0.5f, 2.0f)
+        prefs.edit().putFloat("speech_pitch", clamped).apply()
+        _speechPitch.value = clamped
+    }
+
+    fun setSpokenConfirmation(enabled: Boolean) {
+        prefs.edit().putBoolean("spoken_confirmation", enabled).apply()
+        _spokenConfirmation.value = enabled
     }
 }

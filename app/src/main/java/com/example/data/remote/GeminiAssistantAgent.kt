@@ -32,6 +32,10 @@ sealed class ToolActionRequest {
     data class WhatsAppOpenChat(val recipient: String) : ToolActionRequest()
     data class WhatsAppSearch(val query: String) : ToolActionRequest()
     data class ActiveAppContextAction(val action: String, val parameter: String? = null) : ToolActionRequest()
+    data class PlayStoreSearch(val appName: String) : ToolActionRequest()
+    object OpenRecentCalls : ToolActionRequest()
+    data class QueueControl(val command: String) : ToolActionRequest()
+    object QueryActiveApp : ToolActionRequest()
 }
 
 data class AgentResponse(
@@ -702,7 +706,90 @@ class GeminiAssistantAgent {
             )
         }
 
-        // 11. Dial Phone
+        // 11. Autonomous Task Queue Controls
+        if (p.contains("cancel karo") && (p.contains("task") || p.contains("current"))) {
+            return AgentResponse("Current task cancel kar raha hoon...", ToolActionRequest.QueueControl("cancel"))
+        }
+        if (p.contains("pause karo") && p.contains("queue")) {
+            return AgentResponse("Queue pause kar di hai.", ToolActionRequest.QueueControl("pause"))
+        }
+        if (p.contains("resume karo") && p.contains("queue")) {
+            return AgentResponse("Queue resume kar raha hoon.", ToolActionRequest.QueueControl("resume"))
+        }
+        if (p.contains("skip karo") && (p.contains("task") || p.contains("agla"))) {
+            return AgentResponse("Agla task skip kar raha hoon.", ToolActionRequest.QueueControl("skip"))
+        }
+        if (p.contains("kya kar rahe ho") || p.contains("what are you doing") || p.contains("queue status")) {
+            return AgentResponse("Checking task queue status...", ToolActionRequest.QueueControl("status"))
+        }
+
+        // 12. Active App Query & Close Current App
+        if (p.contains("what app") || p.contains("kaunsi app") || p.contains("kaun sa app") || p.contains("active app")) {
+            return AgentResponse("Checking current active application...", ToolActionRequest.QueryActiveApp)
+        }
+        if (p.contains("close current app") || p.contains("close the app") || p.contains("app band karo") || p == "close app") {
+            return AgentResponse("Closing active application...", ToolActionRequest.ActiveAppContextAction("close_app"))
+        }
+
+        // 13. Play Store & App Installation
+        // Examples: "Play Store kholo", "Instagram download karo", "Play Store par Instagram search karo", "Instagram install karo"
+        if (p.contains("play store") || p.contains("install") || p.contains("download")) {
+            val appToInstall = p
+                .replace(Regex("(?i)\\b(play\\s*store\\s*(par|pe)?|search\\s*karo|download\\s*karo|install\\s*karo|kholo|open|chalao|kijiye|dhoondo|please)\\b"), "")
+                .trim()
+            if (appToInstall.isNotBlank() && appToInstall != "play store") {
+                return AgentResponse(
+                    responseText = "Play Store par \"$appToInstall\" search kiya ja raha hai...",
+                    toolAction = ToolActionRequest.PlayStoreSearch(appToInstall)
+                )
+            } else if (p.contains("play store")) {
+                return AgentResponse("Google Play Store khol raha hoon...", ToolActionRequest.LaunchApp("play store"))
+            }
+        }
+
+        // 14. Dial Phone & Contact Calling
+        // Examples: "Raman ko call karo", "Papa ko phone lagao", "9876543210 par call karo", "Recent calls kholo"
+        if (p.contains("recent call") || p.contains("call log") || p.contains("call history")) {
+            return AgentResponse("Recent call log open kar raha hoon...", ToolActionRequest.OpenRecentCalls)
+        }
+
+        val callNamePattern = Pattern.compile("(?i)^([a-zA-Z0-9\u0900-\u097F]+)\\s+ko\\s+(?:phone|call)\\s*(?:karo|lagao)")
+        val callEnglishPattern = Pattern.compile("(?i)^call\\s+([a-zA-Z0-9\u0900-\u097F]+)")
+        val matcherCall1 = callNamePattern.matcher(prompt.trim())
+        val matcherCall2 = callEnglishPattern.matcher(prompt.trim())
+
+        if (matcherCall1.find()) {
+            val name = matcherCall1.group(1)?.trim() ?: ""
+            if (name.isNotBlank()) {
+                return AgentResponse(
+                    responseText = "$name ko call lagane ke liye prepare kar raha hoon...",
+                    toolAction = ToolActionRequest.DialPhone(phoneNumber = "", contactName = name),
+                    requiresConfirmation = true,
+                    confirmationPrompt = "Kya aap $name ko call karna chahte hain?"
+                )
+            }
+        } else if (matcherCall2.find()) {
+            val name = matcherCall2.group(1)?.trim() ?: ""
+            if (name.isNotBlank()) {
+                val digitsOnly = name.replace(Regex("[^0-9+]"), "")
+                if (digitsOnly.length >= 3) {
+                    return AgentResponse(
+                        responseText = "$digitsOnly dial kiya ja raha hai...",
+                        toolAction = ToolActionRequest.DialPhone(phoneNumber = digitsOnly),
+                        requiresConfirmation = true,
+                        confirmationPrompt = "Do you want to dial $digitsOnly?"
+                    )
+                } else {
+                    return AgentResponse(
+                        responseText = "$name ko call lagane ke liye prepare kar raha hoon...",
+                        toolAction = ToolActionRequest.DialPhone(phoneNumber = "", contactName = name),
+                        requiresConfirmation = true,
+                        confirmationPrompt = "Kya aap $name ko call karna chahte hain?"
+                    )
+                }
+            }
+        }
+
         if (p.contains("dial") || p.contains("call") || p.contains("phone lagao")) {
             val digits = prompt.replace(Regex("[^0-9+]"), "")
             return if (digits.length >= 3) {

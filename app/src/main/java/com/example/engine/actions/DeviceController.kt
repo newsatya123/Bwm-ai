@@ -435,12 +435,111 @@ class DeviceController(private val context: Context) {
                 val success = com.example.service.BwmAccessibilityService.performGlobal("home")
                 ToolExecutionResult(success, if (success) "Home screen..." else "Failed to go home.")
             }
+            "recents", "recent_apps" -> {
+                val success = com.example.service.BwmAccessibilityService.performGlobal("recents")
+                ToolExecutionResult(success, if (success) "Recent apps opened." else "Failed to open recent apps.")
+            }
+            "close_app", "dismiss" -> {
+                closeCurrentAppOrGoHome()
+            }
+            "what_app", "active_app" -> {
+                getActiveAppSummary()
+            }
             "send", "bhejo" -> {
                 val clicked = com.example.service.BwmAccessibilityService.clickWhatsAppSendButton()
                 ToolExecutionResult(clicked, if (clicked) "Message sent." else "Could not find send button.")
             }
             else -> ToolExecutionResult(false, "Unsupported context action: $action")
         }
+    }
+
+    fun openPlayStore(appName: String): ToolExecutionResult {
+        return try {
+            val trimmed = appName.trim()
+            val uri = if (trimmed.isNotBlank()) {
+                val encoded = java.net.URLEncoder.encode(trimmed, "UTF-8")
+                Uri.parse("market://search?q=$encoded")
+            } else {
+                Uri.parse("market://search?q=")
+            }
+            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                setPackage("com.android.vending")
+            }
+            val canResolve = context.packageManager.resolveActivity(intent, 0) != null
+            if (canResolve) {
+                context.startActivity(intent)
+            } else {
+                val webUri = if (trimmed.isNotBlank()) {
+                    val encoded = java.net.URLEncoder.encode(trimmed, "UTF-8")
+                    Uri.parse("https://play.google.com/store/search?q=$encoded")
+                } else {
+                    Uri.parse("https://play.google.com/store/apps")
+                }
+                val webIntent = Intent(Intent.ACTION_VIEW, webUri).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(webIntent)
+            }
+            ToolExecutionResult(true, "Sir, Play Store par '$trimmed' search open kar diya gaya hai.")
+        } catch (e: Exception) {
+            ToolExecutionResult(false, "Play Store open karne me dikkat aayi: ${e.message}")
+        }
+    }
+
+    fun openRecentCalls(): ToolExecutionResult {
+        return try {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                type = android.provider.CallLog.Calls.CONTENT_TYPE
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            if (intent.resolveActivity(context.packageManager) != null) {
+                context.startActivity(intent)
+                ToolExecutionResult(true, "Sir, recent call log open kar diya gaya hai.")
+            } else {
+                val dialerIntent = Intent(Intent.ACTION_DIAL).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(dialerIntent)
+                ToolExecutionResult(true, "Sir, phone dialer open kiya gaya hai.")
+            }
+        } catch (e: Exception) {
+            ToolExecutionResult(false, "Could not open call log: ${e.message}")
+        }
+    }
+
+    fun closeCurrentAppOrGoHome(): ToolExecutionResult {
+        return try {
+            val success = com.example.service.BwmAccessibilityService.performGlobal("home")
+            if (success) {
+                ToolExecutionResult(true, "Sir, screen dismiss karke home screen par aa gaye hain.")
+            } else {
+                val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_HOME)
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(homeIntent)
+                ToolExecutionResult(true, "Sir, home screen par navigate kiya gaya hai.")
+            }
+        } catch (e: Exception) {
+            ToolExecutionResult(false, "Could not navigate home: ${e.message}")
+        }
+    }
+
+    fun getActiveAppSummary(): ToolExecutionResult {
+        val pkg = com.example.service.BwmAccessibilityService.currentForegroundPackage.value
+        val appName = when {
+            pkg.isNullOrBlank() -> "BWM AI Assistant"
+            pkg.contains("youtube") -> "YouTube"
+            pkg.contains("whatsapp") -> "WhatsApp"
+            pkg.contains("vending") -> "Google Play Store"
+            pkg.contains("chrome") -> "Google Chrome"
+            pkg.contains("camera") -> "Camera"
+            pkg.contains("dialer") || pkg.contains("phone") -> "Phone Dialer"
+            pkg.contains("settings") -> "Settings"
+            else -> pkg
+        }
+        return ToolExecutionResult(true, "Sir, abhi '$appName' active application hai.", mapOf("package" to (pkg ?: "")))
     }
 
     private fun sendMediaKeyEvent(keyCode: Int) {

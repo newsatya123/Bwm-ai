@@ -80,6 +80,7 @@ fun OrbVisualizer(
         AssistantUiState.LISTENING_FOR_WAKE_WORD -> logoTheme.primaryColor to logoTheme.secondaryColor
         AssistantUiState.PROCESSING -> ElectricViolet to Color(0xFFF72585)
         AssistantUiState.EXECUTING -> OrbExecutingPulse to Color(0xFFFF9E00)
+        AssistantUiState.WAITING_FOR_CONFIRMATION -> Color(0xFFFFB703) to Color(0xFFFB8500)
         AssistantUiState.SPEAKING -> logoTheme.primaryColor to logoTheme.secondaryColor
         AssistantUiState.ERROR -> ErrorRed to Color(0xFFBA1839)
         AssistantUiState.IDLE -> logoTheme.primaryColor to logoTheme.secondaryColor

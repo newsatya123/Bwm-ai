@@ -1,5 +1,7 @@
 package com.example
 
+import com.example.engine.actions.ContactInfo
+
 enum class AssistantUiState {
     IDLE,
     LISTENING_FOR_WAKE_WORD,
@@ -7,6 +9,7 @@ enum class AssistantUiState {
     LISTENING,
     PROCESSING,
     EXECUTING,
+    WAITING_FOR_CONFIRMATION,
     SPEAKING,
     ERROR;
 
@@ -19,4 +22,12 @@ data class ConfirmationDialogData(
     val message: String,
     val onConfirm: () -> Unit,
     val onCancel: () -> Unit
+)
+
+data class ContactDisambiguationData(
+    val title: String,
+    val prompt: String,
+    val contacts: List<ContactInfo>,
+    val onContactChosen: (ContactInfo) -> Unit,
+    val onDismiss: () -> Unit
 )

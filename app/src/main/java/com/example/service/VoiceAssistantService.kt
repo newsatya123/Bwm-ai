@@ -243,9 +243,21 @@ class VoiceAssistantService : Service() {
                 val res = deviceController?.setAlarm(action.hour, action.minute, action.message)
                 res?.message ?: "Alarm set"
             }
-            is ToolActionRequest.DeviceNavigation -> {
-                val success = BwmAccessibilityService.performGlobal(action.action)
-                if (success) "Performed ${action.action}" else "Accessibility navigation"
+            is ToolActionRequest.PlayStoreSearch -> {
+                val res = deviceController?.openPlayStore(action.appName)
+                res?.message ?: "Opening Play Store for ${action.appName}"
+            }
+            is ToolActionRequest.OpenRecentCalls -> {
+                val res = deviceController?.openRecentCalls()
+                res?.message ?: "Opening recent calls"
+            }
+            is ToolActionRequest.DialPhone -> {
+                val res = deviceController?.openDialer(action.phoneNumber)
+                res?.message ?: "Opening phone dialer"
+            }
+            is ToolActionRequest.QueryActiveApp -> {
+                val res = deviceController?.getActiveAppSummary()
+                res?.message ?: "Checking active app"
             }
             else -> "Command executed"
         }
