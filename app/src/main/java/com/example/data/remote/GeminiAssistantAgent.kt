@@ -100,6 +100,8 @@ class GeminiAssistantAgent {
             }
 
             parseGeminiResponse(responseBody, userPrompt)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e("BwmAgent", "Exception in Gemini API call: ${e.message}, using local NLP fallback")
             parseWithOfflineNlp(userPrompt)

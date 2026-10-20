@@ -105,6 +105,9 @@ class TaskQueueManager(
                     } else {
                         updateTaskStatus(pendingTask.id, TaskStatus.COMPLETED, resultMessage)
                     }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    updateTaskStatus(pendingTask.id, TaskStatus.CANCELLED, "Task cancelled")
+                    throw e
                 } catch (e: Exception) {
                     updateTaskStatus(pendingTask.id, TaskStatus.FAILED, "Error: ${e.message}")
                 }

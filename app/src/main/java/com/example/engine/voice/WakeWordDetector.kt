@@ -145,12 +145,15 @@ class ModularWakeWordEngine(private val context: Context) : WakeWordDetector {
 
     override fun stop() {
         _isListening.value = false
-        recordingJob?.cancel()
+        val job = recordingJob
         recordingJob = null
         onDetectedCallback = null
+        job?.cancel()
 
         try {
-            audioRecord?.stop()
+            if (audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                audioRecord?.stop()
+            }
             audioRecord?.release()
         } catch (_: Exception) {}
         audioRecord = null
@@ -200,7 +203,7 @@ class ModularWakeWordEngine(private val context: Context) : WakeWordDetector {
             var noiseFloor = 250.0
             var lastTriggerTime = 0L
 
-            while (scope.isActive && _isListening.value) {
+            while (kotlin.coroutines.coroutineContext.isActive && _isListening.value) {
                 val readCount = audioRecord?.read(pcmBuffer, 0, pcmBuffer.size) ?: -1
                 if (readCount <= 0) {
                     kotlinx.coroutines.delay(20)
@@ -239,11 +242,16 @@ class ModularWakeWordEngine(private val context: Context) : WakeWordDetector {
                     if (speechFrameCount > 0) speechFrameCount--
                 }
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Normal coroutine cancellation when stopping wake word or transitioning to active voice capture
+            Log.d(TAG, "Silent AudioRecord wake-word loop stopped cleanly.")
         } catch (e: Exception) {
             Log.e(TAG, "Exception in silent AudioRecord wake-word loop: ${e.message}")
         } finally {
             try {
-                audioRecord?.stop()
+                if (audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                    audioRecord?.stop()
+                }
                 audioRecord?.release()
             } catch (_: Exception) {}
             audioRecord = null
