@@ -36,6 +36,13 @@ sealed class ToolActionRequest {
     object OpenRecentCalls : ToolActionRequest()
     data class QueueControl(val command: String) : ToolActionRequest()
     object QueryActiveApp : ToolActionRequest()
+    data class ReadScreen(val query: String? = null, val mode: String = "read") : ToolActionRequest()
+    data class ReadWhatsAppChat(val recipient: String? = null, val count: Int = 1, val query: String? = null) : ToolActionRequest()
+    data class SearchAndSummarizeWeb(val query: String, val openFirstResult: Boolean = false) : ToolActionRequest()
+    data class OpenPdfDocument(val fileNameQuery: String? = null) : ToolActionRequest()
+    data class ReadPdf(val pageNumber: Int? = null, val action: String = "read") : ToolActionRequest()
+    data class ControlReading(val command: String) : ToolActionRequest()
+    data class OcrImageOrScreen(val action: String = "read") : ToolActionRequest()
 }
 
 data class AgentResponse(
@@ -293,6 +300,61 @@ class GeminiAssistantAgent {
             listOf("action")
         ))
 
+        functionDeclarations.put(createTool(
+            "read_screen",
+            "Read visible text on active screen, summarize page content, or answer questions about what is on screen",
+            listOf(
+                "mode" to "read, summary, explain, or important_points",
+                "query" to "Optional question about the screen"
+            ),
+            listOf("mode")
+        ))
+
+        functionDeclarations.put(createTool(
+            "read_whatsapp_chat",
+            "Read the last visible messages or conversation summary from WhatsApp chat",
+            listOf(
+                "recipient" to "Optional contact name whose chat to read",
+                "count" to "Number of recent messages to read (e.g. 1 or 3)",
+                "query" to "Optional 'summary' or specific request"
+            ),
+            emptyList()
+        ))
+
+        functionDeclarations.put(createTool(
+            "search_and_summarize_web",
+            "Search Google/web for a query, open result and provide concise explanation or summary",
+            listOf(
+                "query" to "Search query topic",
+                "open_first_result" to "Whether to open first result link (true/false)"
+            ),
+            listOf("query")
+        ))
+
+        functionDeclarations.put(createTool(
+            "open_pdf_document",
+            "Open system document picker or search for PDF to read",
+            listOf("file_name" to "Optional PDF file name"),
+            emptyList()
+        ))
+
+        functionDeclarations.put(createTool(
+            "read_pdf",
+            "Read page-by-page or summarize currently opened PDF document",
+            listOf(
+                "page_number" to "Page number to read (1-based)",
+                "action" to "read, next, summary, or read_all"
+            ),
+            listOf("action")
+        ))
+
+        functionDeclarations.put(createTool(
+            "control_reading",
+            "Control reading engine playback: pause, resume, stop, repeat, next, faster, or slower",
+            listOf("command" to "pause, resume, stop, repeat, next, faster, or slower"),
+            listOf("command")
+        ))
+
         toolsContainer.put("functionDeclarations", functionDeclarations)
         toolsArray.put(toolsContainer)
         root.put("tools", toolsArray)
@@ -449,6 +511,41 @@ class GeminiAssistantAgent {
                         val param = args.optString("parameter", "")
                         toolActions.add(ToolActionRequest.ActiveAppContextAction(action, if (param.isNotEmpty()) param else null))
                         if (textResponse.isBlank()) textResponse = "Executing $action..."
+                    }
+                    "read_screen" -> {
+                        val mode = args.optString("mode", "read")
+                        val query = if (args.has("query")) args.getString("query") else null
+                        toolActions.add(ToolActionRequest.ReadScreen(query, mode))
+                        if (textResponse.isBlank()) textResponse = "Screen text analyze kar raha hoon..."
+                    }
+                    "read_whatsapp_chat" -> {
+                        val recipient = if (args.has("recipient")) args.getString("recipient") else null
+                        val count = args.optInt("count", 1)
+                        val query = if (args.has("query")) args.getString("query") else null
+                        toolActions.add(ToolActionRequest.ReadWhatsAppChat(recipient, count, query))
+                        if (textResponse.isBlank()) textResponse = "WhatsApp chat messages padh raha hoon..."
+                    }
+                    "search_and_summarize_web" -> {
+                        val query = args.optString("query", "")
+                        val openFirst = args.optBoolean("open_first_result", false)
+                        toolActions.add(ToolActionRequest.SearchAndSummarizeWeb(query, openFirst))
+                        if (textResponse.isBlank()) textResponse = "Google par \"$query\" search karke summary prepare kar raha hoon..."
+                    }
+                    "open_pdf_document" -> {
+                        val fileName = if (args.has("file_name")) args.getString("file_name") else null
+                        toolActions.add(ToolActionRequest.OpenPdfDocument(fileName))
+                        if (textResponse.isBlank()) textResponse = "PDF document open kar raha hoon..."
+                    }
+                    "read_pdf" -> {
+                        val pageNum = if (args.has("page_number")) args.getInt("page_number") else null
+                        val action = args.optString("action", "read")
+                        toolActions.add(ToolActionRequest.ReadPdf(pageNum, action))
+                        if (textResponse.isBlank()) textResponse = "PDF page padh raha hoon..."
+                    }
+                    "control_reading" -> {
+                        val cmd = args.optString("command", "pause")
+                        toolActions.add(ToolActionRequest.ControlReading(cmd))
+                        if (textResponse.isBlank()) textResponse = "Reading command: $cmd"
                     }
                 }
             }
@@ -804,6 +901,145 @@ class GeminiAssistantAgent {
             } else {
                 AgentResponse("Opening phone dialer...", ToolActionRequest.OpenSettings("phone"))
             }
+        }
+
+        // --- READING PLAYBACK CONTROLS ---
+        if (p.contains("reading pause") || p.contains("padhna pause") || (p.contains("pause") && (p.contains("padho") || p.contains("sunao")))) {
+            return AgentResponse("Reading pause kar di hai.", ToolActionRequest.ControlReading("pause"))
+        }
+        if (p.contains("reading continue") || p.contains("padhna continue") || p.contains("continue reading") || (p.contains("resume") && p.contains("reading"))) {
+            return AgentResponse("Reading continue kar raha hoon.", ToolActionRequest.ControlReading("resume"))
+        }
+        if (p.contains("padhna band") || p.contains("reading band") || p.contains("stop reading") || p.contains("reading roko")) {
+            return AgentResponse("Reading band kar di hai.", ToolActionRequest.ControlReading("stop"))
+        }
+        if (p.contains("dobara padho") || p.contains("repeat karo") || p.contains("dobara sunao") || p.contains("last line dobara")) {
+            return AgentResponse("Dobara padh raha hoon...", ToolActionRequest.ControlReading("repeat"))
+        }
+        if (p.contains("agla paragraph") || p.contains("agla para") || p.contains("next paragraph") || p.contains("agla message")) {
+            return AgentResponse("Agla part padh raha hoon...", ToolActionRequest.ControlReading("next"))
+        }
+        if (p.contains("reading speed fast") || p.contains("speed badhao") || p.contains("tez padho") || p.contains("speed fast")) {
+            return AgentResponse("Reading speed badha raha hoon.", ToolActionRequest.ControlReading("faster"))
+        }
+        if (p.contains("reading speed slow") || p.contains("speed kam") || p.contains("dhire padho") || p.contains("slow padho") || p.contains("speed slow")) {
+            return AgentResponse("Reading speed slow kar raha hoon.", ToolActionRequest.ControlReading("slower"))
+        }
+
+        // --- WHATSAPP MESSAGE READING ---
+        // Examples: "Raman ka last message padho", "Raman ka last message mujhe sunaao", "Raman ke last teen messages padho", "Is chat ka short summary do", "Raman ne kya reply diya?"
+        if (p.contains("message padho") || p.contains("messages padho") || p.contains("message sunao") || p.contains("reply diya") || (p.contains("chat") && (p.contains("summary") || p.contains("padho")))) {
+            var recipient: String? = null
+            var count = 1
+
+            if (p.contains("teen") || p.contains("3") || p.contains("three")) {
+                count = 3
+            } else if (p.contains("paanch") || p.contains("5") || p.contains("five")) {
+                count = 5
+            }
+
+            val readChatPattern = Pattern.compile("(?i)^([a-zA-Z0-9\u0900-\u097F]+)\\s+(?:ka|ki|ke|ne)?\\s*(?:last|aakhri)?\\s*(?:\\d+|teen|do)?\\s*(?:message|messages|msg|chat|reply)")
+            val m = readChatPattern.matcher(prompt.trim())
+            if (m.find()) {
+                val foundName = m.group(1)?.trim()
+                if (!foundName.isNullOrBlank() && foundName.lowercase() != "is" && foundName.lowercase() != "ye" && foundName.lowercase() != "whatsapp") {
+                    recipient = foundName
+                }
+            }
+
+            val isSummary = p.contains("summary") || p.contains("short mein")
+            val targetName = recipient ?: "contact"
+            return AgentResponse(
+                responseText = if (isSummary) "WhatsApp chat ka summary prepare kar raha hoon..." else "$targetName ka message padh raha hoon...",
+                toolAction = ToolActionRequest.ReadWhatsAppChat(
+                    recipient = recipient,
+                    count = count,
+                    query = if (isSummary) "summary" else null
+                )
+            )
+        }
+
+        // --- SCREEN AWARENESS & SCREEN TEXT EXPLANATION ---
+        // Examples: "Screen par kya likha hai?", "Ye text padho", "Iska matlab samjhao", "Short mein explain karo", "Is page par kya likha hai?", "Is article ko Hindi mein samjhao", "Is page ka important information padho"
+        if (p.contains("screen par kya") || p.contains("is page par kya") || p.contains("ye text padho") || p.contains("screen padho") || p.contains("screen text")) {
+            return AgentResponse(
+                responseText = "Screen par likha hua text check kar raha hoon...",
+                toolAction = ToolActionRequest.ReadScreen(mode = "read")
+            )
+        }
+        if (p.contains("iska matlab samjhao") || p.contains("short mein explain") || p.contains("page ka summary") || p.contains("webpage ka summary") || p.contains("hindi mein samjhao")) {
+            return AgentResponse(
+                responseText = "Screen content analyze karke summary tayyar kar raha hoon...",
+                toolAction = ToolActionRequest.ReadScreen(mode = "summary")
+            )
+        }
+        if (p.contains("important information") || p.contains("important points") || p.contains("mukhya batein")) {
+            return AgentResponse(
+                responseText = "Screen ke important points nikal raha hoon...",
+                toolAction = ToolActionRequest.ReadScreen(mode = "important_points")
+            )
+        }
+
+        // --- GOOGLE SEARCH & WEBPAGE UNDERSTANDING ---
+        // Examples: "Google par deepfake search karo", "Deepfake kya hota hai, search karke samjhao", "Pehla search result kholo"
+        if (p.contains("pehla search result") || p.contains("first search result") || p.contains("first result kholo") || p.contains("pehla link")) {
+            return AgentResponse("Pehla search result open kar raha hoon...", ToolActionRequest.ActiveAppContextAction("click_first_result"))
+        }
+
+        if (p.contains("google par") && (p.contains("search") || p.contains("dhoondo"))) {
+            val q = p
+                .replace(Regex("(?i)\\b(google\\s*(par|pe)?|search\\s*karo|khojo|dhoondo|please|karo)\\b"), "")
+                .trim()
+            return AgentResponse(
+                responseText = "Google par \"$q\" search karke information nikal raha hoon...",
+                toolAction = ToolActionRequest.SearchAndSummarizeWeb(query = q, openFirstResult = false)
+            )
+        }
+        if (p.contains("search karke samjhao") || (p.contains("kya hota hai") && p.contains("search"))) {
+            val q = p
+                .replace(Regex("(?i)\\b(search\\s*karke\\s*samjhao|search\\s*karo|kya\\s*hota\\s*hai|samjhao|please)\\b"), "")
+                .trim()
+            return AgentResponse(
+                responseText = "\"$q\" search karke simple bhasha me samjha raha hoon...",
+                toolAction = ToolActionRequest.SearchAndSummarizeWeb(query = q, openFirstResult = true)
+            )
+        }
+
+        // --- PDF READING & DOCUMENT UNDERSTANDING ---
+        // Examples: "PDF kholo", "Downloads mein PDF dhoondo", "Is PDF ka first page padho", "Pura PDF padhkar sunaao", "Is document ka summary do", "Page number 5 padho", "Important points batao", "Agla page padho"
+        if (p.contains("pdf kholo") || p.contains("document kholo") || p.contains("pdf dhoondo") || p.contains("open pdf")) {
+            return AgentResponse(
+                responseText = "PDF document picker open kar raha hoon...",
+                toolAction = ToolActionRequest.OpenPdfDocument()
+            )
+        }
+        if (p.contains("pdf") || p.contains("document")) {
+            if (p.contains("summary") || p.contains("points batao") || p.contains("samjhao")) {
+                return AgentResponse("PDF document ka summary generate kar raha hoon...", ToolActionRequest.ReadPdf(action = "summary"))
+            }
+            if (p.contains("pura pdf") || p.contains("full pdf") || p.contains("all pages")) {
+                return AgentResponse("Pura PDF padhkar suna raha hoon...", ToolActionRequest.ReadPdf(action = "read_all"))
+            }
+            if (p.contains("agla page") || p.contains("next page")) {
+                return AgentResponse("Agla page padh raha hoon...", ToolActionRequest.ReadPdf(action = "next"))
+            }
+            // Check specific page number: "Page number 5 padho", "first page padho"
+            val pageMatcher = Pattern.compile("(?i)(?:page\\s*(?:number|no)?\\s*|first|pehla\\s*page\\s*)(\\d+|first|pehla)").matcher(p)
+            var targetPage: Int? = null
+            if (pageMatcher.find()) {
+                val grp = pageMatcher.group(1)?.lowercase() ?: ""
+                targetPage = when (grp) {
+                    "first", "pehla" -> 1
+                    else -> grp.toIntOrNull() ?: 1
+                }
+            } else if (p.contains("first page") || p.contains("pehla page")) {
+                targetPage = 1
+            }
+
+            return AgentResponse(
+                responseText = if (targetPage != null) "PDF ka page number $targetPage padh raha hoon..." else "PDF page padh raha hoon...",
+                toolAction = ToolActionRequest.ReadPdf(pageNumber = targetPage, action = "read")
+            )
         }
 
         // 10. YouTube Controls & Searches

@@ -16,8 +16,8 @@ android {
     applicationId = "com.aistudio.bwmai.vxnpza"
     minSdk = 24
     targetSdk = 36
-    versionCode = 5
-    versionName = "1.4.0"
+    versionCode = 6
+    versionName = "1.5.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -107,6 +107,7 @@ dependencies {
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
   implementation(libs.retrofit)
+  implementation(libs.mlkit.text.recognition)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

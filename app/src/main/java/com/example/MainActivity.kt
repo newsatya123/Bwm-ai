@@ -3,8 +3,10 @@ package com.example
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -94,6 +96,29 @@ class MainActivity : ComponentActivity() {
                     }
                     if (needed.isNotEmpty()) {
                         permissionsLauncher.launch(needed.toTypedArray())
+                    }
+                }
+
+                // PDF document picker for voice-activated PDF reading
+                val pdfPickerLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.OpenDocument()
+                ) { uri: Uri? ->
+                    if (uri != null) {
+                        val fileName = contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                            if (cursor.moveToFirst() && nameIndex >= 0) {
+                                cursor.getString(nameIndex)
+                            } else "Document.pdf"
+                        } ?: "Document.pdf"
+                        viewModel.openPdfFromUri(uri, fileName)
+                    }
+                }
+
+                val requestPdfPicker by viewModel.requestOpenPdfPicker.collectAsState()
+                LaunchedEffect(requestPdfPicker) {
+                    if (requestPdfPicker) {
+                        viewModel.onPdfPickerConsumed()
+                        pdfPickerLauncher.launch(arrayOf("application/pdf"))
                     }
                 }
 

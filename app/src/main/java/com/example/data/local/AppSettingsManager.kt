@@ -128,6 +128,12 @@ class AppSettingsManager(context: Context) {
     private val _spokenConfirmation = MutableStateFlow(prefs.getBoolean("spoken_confirmation", true))
     val spokenConfirmation: StateFlow<Boolean> = _spokenConfirmation.asStateFlow()
 
+    private val _isScreenReadingEnabled = MutableStateFlow(prefs.getBoolean("screen_reading_enabled", true))
+    val isScreenReadingEnabled: StateFlow<Boolean> = _isScreenReadingEnabled.asStateFlow()
+
+    private val _whatsappAutoReadOutLoud = MutableStateFlow(prefs.getBoolean("whatsapp_auto_read_out_loud", true))
+    val whatsappAutoReadOutLoud: StateFlow<Boolean> = _whatsappAutoReadOutLoud.asStateFlow()
+
     fun setAssistantName(name: String) {
         val clean = name.trim().ifBlank { "BWM AI" }
         prefs.edit().putString("assistant_name", clean).apply()
@@ -190,5 +196,15 @@ class AppSettingsManager(context: Context) {
     fun setSpokenConfirmation(enabled: Boolean) {
         prefs.edit().putBoolean("spoken_confirmation", enabled).apply()
         _spokenConfirmation.value = enabled
+    }
+
+    fun setScreenReadingEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("screen_reading_enabled", enabled).apply()
+        _isScreenReadingEnabled.value = enabled
+    }
+
+    fun setWhatsappAutoReadOutLoud(enabled: Boolean) {
+        prefs.edit().putBoolean("whatsapp_auto_read_out_loud", enabled).apply()
+        _whatsappAutoReadOutLoud.value = enabled
     }
 }

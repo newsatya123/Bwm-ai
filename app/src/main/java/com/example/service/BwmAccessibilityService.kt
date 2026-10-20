@@ -179,7 +179,191 @@ class BwmAccessibilityService : AccessibilityService() {
             val root = service.rootInActiveWindow ?: return false
             return service.findAndClickNextNode(root)
         }
+
+        fun isYouTubePlaying(): Boolean {
+            val service = instance ?: return false
+            val root = service.rootInActiveWindow ?: return false
+            val pkg = root.packageName?.toString() ?: getActivePackage()
+            if (!pkg.contains("youtube", ignoreCase = true)) return false
+
+            fun checkPauseNode(node: AccessibilityNodeInfo, depth: Int): Boolean {
+                if (depth > 25) return false
+                val desc = node.contentDescription?.toString()?.lowercase() ?: ""
+                val text = node.text?.toString()?.lowercase() ?: ""
+                if (desc.contains("pause video") || text.contains("pause video") || desc == "pause") {
+                    return true
+                }
+                for (i in 0 until node.childCount) {
+                    val child = node.getChild(i) ?: continue
+                    if (checkPauseNode(child, depth + 1)) return true
+                }
+                return false
+            }
+
+            return checkPauseNode(root, 0)
+        }
+
+        // --- SCREEN-AWARE TEXT READING ---
+        fun extractActiveScreenContent(): ScreenContent? {
+            val service = instance ?: return null
+            val root = service.rootInActiveWindow ?: return null
+            val pkg = root.packageName?.toString() ?: getActivePackage()
+            val textList = mutableListOf<String>()
+            val clickableList = mutableListOf<String>()
+            val editableList = mutableListOf<String>()
+
+            fun traverse(node: AccessibilityNodeInfo, depth: Int) {
+                if (depth > 30) return
+                val text = node.text?.toString()?.trim()
+                val desc = node.contentDescription?.toString()?.trim()
+
+                if (!text.isNullOrBlank()) {
+                    textList.add(text)
+                } else if (!desc.isNullOrBlank() && (node.isClickable || desc.length > 3)) {
+                    textList.add(desc)
+                }
+
+                if (node.isClickable) {
+                    val label = text ?: desc
+                    if (!label.isNullOrBlank() && !clickableList.contains(label)) {
+                        clickableList.add(label)
+                    }
+                }
+                if (node.isEditable) {
+                    val label = text ?: desc ?: node.viewIdResourceName ?: "Input field"
+                    editableList.add(label)
+                }
+
+                for (i in 0 until node.childCount) {
+                    val child = node.getChild(i) ?: continue
+                    traverse(child, depth + 1)
+                }
+            }
+
+            traverse(root, 0)
+
+            val cleanTexts = textList.distinct().filter { it.isNotBlank() }
+            val title = cleanTexts.firstOrNull() ?: pkg
+            val summary = cleanTexts.joinToString("\n")
+            return ScreenContent(
+                packageName = pkg,
+                title = title,
+                textNodes = cleanTexts,
+                clickableElements = clickableList.distinct(),
+                editableElements = editableList.distinct(),
+                rawSummaryText = summary
+            )
+        }
+
+        // --- WHATSAPP CONVERSATION READING ---
+        fun extractVisibleWhatsAppMessages(maxCount: Int = 3): List<WhatsAppVisibleMessage> {
+            val service = instance ?: return emptyList()
+            val root = service.rootInActiveWindow ?: return emptyList()
+            val messages = mutableListOf<WhatsAppVisibleMessage>()
+
+            var activeChatContact = "Contact"
+
+            fun findContactName(node: AccessibilityNodeInfo, depth: Int) {
+                if (depth > 15) return
+                val id = node.viewIdResourceName ?: ""
+                if (id.contains("conversation_contact_name", ignoreCase = true) || id.contains("contact_name", ignoreCase = true)) {
+                    val text = node.text?.toString()?.trim()
+                    if (!text.isNullOrBlank()) {
+                        activeChatContact = text
+                        return
+                    }
+                }
+                for (i in 0 until node.childCount) {
+                    val child = node.getChild(i) ?: continue
+                    findContactName(child, depth + 1)
+                }
+            }
+            findContactName(root, 0)
+
+            fun traverseMessages(node: AccessibilityNodeInfo, depth: Int) {
+                if (depth > 35) return
+                val id = node.viewIdResourceName ?: ""
+                val text = node.text?.toString()?.trim() ?: ""
+                val desc = node.contentDescription?.toString()?.trim() ?: ""
+
+                val isMessageNode = id.contains("message_text", ignoreCase = true) ||
+                        id.contains("conversation_text", ignoreCase = true) ||
+                        (text.isNotBlank() && id.contains("message", ignoreCase = true))
+
+                if (isMessageNode && text.isNotBlank()) {
+                    val isOutgoing = desc.contains("Delivered", ignoreCase = true) ||
+                            desc.contains("Read", ignoreCase = true) ||
+                            desc.contains("Sent", ignoreCase = true) ||
+                            id.contains("outgoing", ignoreCase = true)
+
+                    val sender = if (isOutgoing) "Aap" else activeChatContact
+                    messages.add(
+                        WhatsAppVisibleMessage(
+                            sender = sender,
+                            message = text,
+                            timestamp = null,
+                            isOutgoing = isOutgoing
+                        )
+                    )
+                }
+
+                for (i in 0 until node.childCount) {
+                    val child = node.getChild(i) ?: continue
+                    traverseMessages(child, depth + 1)
+                }
+            }
+
+            traverseMessages(root, 0)
+
+            if (messages.isEmpty()) {
+                val allTexts = mutableListOf<String>()
+                fun fallback(node: AccessibilityNodeInfo, depth: Int) {
+                    if (depth > 30) return
+                    val t = node.text?.toString()?.trim()
+                    if (!t.isNullOrBlank() && t.length > 1 &&
+                        !t.contains("Type a message", ignoreCase = true) &&
+                        !t.contains("Search", ignoreCase = true) &&
+                        !t.contains("Online", ignoreCase = true) &&
+                        !t.contains("typing...", ignoreCase = true)
+                    ) {
+                        allTexts.add(t)
+                    }
+                    for (i in 0 until node.childCount) {
+                        val child = node.getChild(i) ?: continue
+                        fallback(child, depth + 1)
+                    }
+                }
+                fallback(root, 0)
+                allTexts.distinct().takeLast(maxCount).forEach { t ->
+                    messages.add(WhatsAppVisibleMessage(sender = activeChatContact, message = t))
+                }
+            }
+
+            return messages.takeLast(maxCount)
+        }
+
+        fun clickFirstSearchResult(): Boolean {
+            val service = instance ?: return false
+            val root = service.rootInActiveWindow ?: return false
+            return service.findAndClickFirstSearchResultNode(root)
+        }
     }
+
+data class ScreenContent(
+    val packageName: String,
+    val title: String,
+    val textNodes: List<String>,
+    val clickableElements: List<String>,
+    val editableElements: List<String>,
+    val rawSummaryText: String
+)
+
+data class WhatsAppVisibleMessage(
+    val sender: String,
+    val message: String,
+    val timestamp: String? = null,
+    val isOutgoing: Boolean = false
+)
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -446,6 +630,39 @@ class BwmAccessibilityService : AccessibilityService() {
             if (findAndClickNextNode(child, depth + 1)) return true
         }
 
+        return false
+    }
+
+    private fun findAndClickFirstSearchResultNode(node: AccessibilityNodeInfo, depth: Int = 0): Boolean {
+        if (depth > 25) return false
+        val text = node.text?.toString() ?: ""
+        val desc = node.contentDescription?.toString() ?: ""
+
+        val isCandidate = (node.isClickable && (text.length > 10 || desc.length > 10)) &&
+                !text.contains("Search", ignoreCase = true) &&
+                !desc.contains("Search", ignoreCase = true) &&
+                !text.contains("Google", ignoreCase = true)
+
+        if (isCandidate) {
+            val clicked = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            if (clicked) return true
+        }
+
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            if (findAndClickFirstSearchResultNode(child, depth + 1)) return true
+        }
+
+        if (isCandidate) {
+            var parent = node.parent
+            while (parent != null) {
+                if (parent.isClickable) {
+                    val clicked = parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    if (clicked) return true
+                }
+                parent = parent.parent
+            }
+        }
         return false
     }
 }

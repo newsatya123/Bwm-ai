@@ -274,7 +274,7 @@ fun AssistantMainScreen(
                 }
             }
 
-            // Right: Language Selector Pill & Compact Wake Word Dot
+            // Right: Language Selector Pill (Clean, header contains NO wake-word controls)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -303,33 +303,8 @@ fun AssistantMainScreen(
                         fontSize = 11.sp,
                         color = NeonCyan,
                         fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                     )
-                }
-
-                // Compact status dot indicating wake-word engine state
-                Surface(
-                    color = if (isWakeWordEnabled) RadiantEmerald.copy(alpha = 0.15f) else SurfaceVariantNavy,
-                    shape = RoundedCornerShape(10.dp),
-                    border = androidx.compose.foundation.BorderStroke(
-                        1.dp,
-                        if (isWakeWordEnabled) RadiantEmerald.copy(alpha = 0.5f) else CardBorderNavy
-                    ),
-                    modifier = Modifier
-                        .clickable { viewModel.toggleWakeWord(!isWakeWordEnabled) }
-                        .testTag("wake_word_compact_indicator")
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
-                    ) {
-                        Text(
-                            text = if (isWakeWordEnabled) "⚡ Hey $assistantName" else "⚡ Wake OFF",
-                            color = if (isWakeWordEnabled) RadiantEmerald else TextSecondary,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
                 }
             }
         }

@@ -449,7 +449,25 @@ class DeviceController(private val context: Context) {
                 val clicked = com.example.service.BwmAccessibilityService.clickWhatsAppSendButton()
                 ToolExecutionResult(clicked, if (clicked) "Message sent." else "Could not find send button.")
             }
+            "click_first_result", "first_result" -> {
+                val clicked = com.example.service.BwmAccessibilityService.clickFirstSearchResult()
+                ToolExecutionResult(clicked, if (clicked) "Pehla search result open kar diya hai." else "Pehla result click nahi ho saka.")
+            }
             else -> ToolExecutionResult(false, "Unsupported context action: $action")
+        }
+    }
+
+    fun openGoogleSearch(query: String): ToolExecutionResult {
+        return try {
+            val encoded = java.net.URLEncoder.encode(query.trim(), "UTF-8")
+            val searchUri = Uri.parse("https://www.google.com/search?q=$encoded")
+            val intent = Intent(Intent.ACTION_VIEW, searchUri).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+            ToolExecutionResult(true, "Google par \"$query\" search khol diya hai.")
+        } catch (e: Exception) {
+            ToolExecutionResult(false, "Search failed: ${e.message}")
         }
     }
 

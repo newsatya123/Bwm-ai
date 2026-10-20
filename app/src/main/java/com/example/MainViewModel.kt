@@ -26,6 +26,12 @@ import com.example.engine.voice.TextToSpeechManager
 import com.example.engine.voice.WakeWordDetector
 import com.example.service.BwmAccessibilityService
 import com.example.service.VoiceAssistantService
+import android.net.Uri
+import com.example.engine.ocr.OcrManager
+import com.example.engine.reading.PdfDocumentInfo
+import com.example.engine.reading.PdfReadingManager
+import com.example.engine.reading.ScreenReadingManager
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -106,6 +112,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var speechRecognizerManager: SpeechRecognizerManager? = null
     private val wakeWordEngine: WakeWordDetector = ModularWakeWordEngine(context)
 
+    // Screen awareness, OCR & Document reading
+    val ocrManager = OcrManager(context)
+    val screenReadingManager = ScreenReadingManager(context, ttsManager, viewModelScope)
+    val pdfReadingManager = PdfReadingManager(context, ocrManager)
+
+    val isReadingActive: StateFlow<Boolean> = screenReadingManager.isReadingActive
+    val isReadingPaused: StateFlow<Boolean> = screenReadingManager.isReadingPaused
+    val currentDocInfo: StateFlow<PdfDocumentInfo?> = pdfReadingManager.currentDocInfo
+    val currentPdfPage: StateFlow<Int> = pdfReadingManager.currentPage
+    val isScreenReadingEnabled: StateFlow<Boolean> = settingsManager.isScreenReadingEnabled
+    val whatsappAutoReadOutLoud: StateFlow<Boolean> = settingsManager.whatsappAutoReadOutLoud
+
+    private val _requestOpenPdfPicker = MutableStateFlow(false)
+    val requestOpenPdfPicker: StateFlow<Boolean> = _requestOpenPdfPicker.asStateFlow()
+
     private var activeProcessingJob: Job? = null
 
     init {
@@ -134,9 +155,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             ttsManager.isSpeaking.collect { isSpeaking ->
                 if (!isSpeaking && _uiState.value == AssistantUiState.SPEAKING) {
-                    if (isContinuousListening.value) {
+                    val activePkg = BwmAccessibilityService.getActivePackage()
+                    val isYouTubeActive = activePkg.contains("youtube", ignoreCase = true) || BwmAccessibilityService.isYouTubePlaying()
+
+                    if (isYouTubeActive) {
+                        // Special requirement: When YouTube video is playing/active, stop continuous listening and only wake up on wake word
+                        _uiState.value = AssistantUiState.IDLE
+                        _currentStatusMessage.value = "YouTube video active. Say 'Hey ${assistantName.value}' to speak"
+                        startWakeWordEngineIfEnabled()
+                    } else if (isContinuousListening.value) {
                         _currentStatusMessage.value = "Continuous listening active... Speak your next command"
-                        kotlinx.coroutines.delay(450)
+                        delay(450)
                         startVoiceListening()
                     } else {
                         _uiState.value = AssistantUiState.IDLE
@@ -266,6 +295,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setWhatsappDirectSend(enabled: Boolean) {
         settingsManager.setWhatsappDirectSend(enabled)
+    }
+
+    fun onPdfPickerConsumed() {
+        _requestOpenPdfPicker.value = false
+    }
+
+    fun openPdfFromUri(uri: Uri, fileName: String) {
+        viewModelScope.launch {
+            val res = pdfReadingManager.openPdf(uri, fileName)
+            res.fold(
+                onSuccess = { info ->
+                    val msg = "PDF '${info.title}' open ho gayi hai (${info.totalPages} pages). 'Pehla page padho' ya 'Summary do' bol sakte hain."
+                    onAssistantFinished(msg, msg, "OpenPdf", info.title, true)
+                },
+                onFailure = { err ->
+                    val msg = "PDF open karne me error: ${err.message}"
+                    onAssistantFinished(msg, msg, "OpenPdf", err.message, false)
+                }
+            )
+        }
+    }
+
+    fun setScreenReadingEnabled(enabled: Boolean) {
+        settingsManager.setScreenReadingEnabled(enabled)
+    }
+
+    fun setWhatsappAutoReadOutLoud(enabled: Boolean) {
+        settingsManager.setWhatsappAutoReadOutLoud(enabled)
     }
 
     fun triggerHeyBwmTest() {
@@ -752,6 +809,102 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val res = deviceController.getActiveAppSummary()
                 Triple(res.isSuccess, res.message, res.message)
             }
+            is ToolActionRequest.ReadScreen -> {
+                if (!settingsManager.isScreenReadingEnabled.value) {
+                    val msg = "Screen Reading mode Settings me disabled hai. Kripya Settings se use enable karein."
+                    Triple(false, msg, msg)
+                } else {
+                    val msg = if (action.mode == "summary" || action.mode == "explain" || action.mode == "important_points") {
+                        screenReadingManager.summarizeScreen(geminiAgent, action.query)
+                    } else {
+                        screenReadingManager.extractScreenText()
+                    }
+                    dao.insertActionLog(ActionLogItem(toolName = "ReadScreen", parameters = "mode=${action.mode}", result = msg, isSuccess = true))
+                    Triple(true, msg, msg)
+                }
+            }
+            is ToolActionRequest.ReadWhatsAppChat -> {
+                if (!action.recipient.isNullOrBlank()) {
+                    val cleanRecipient = action.recipient.trim()
+                    if (contactsManager.hasContactsPermission()) {
+                        val matches = contactsManager.searchContacts(cleanRecipient)
+                        if (matches.isNotEmpty()) {
+                            deviceController.openWhatsAppChat(matches.first().normalizedNumber, null, false, matches.first().name)
+                            delay(1200)
+                        }
+                    }
+                }
+                val msg = if (action.query == "summary") {
+                    screenReadingManager.summarizeWhatsAppChat(geminiAgent)
+                } else {
+                    screenReadingManager.readWhatsAppLastMessages(action.count)
+                }
+                dao.insertActionLog(ActionLogItem(toolName = "ReadWhatsAppChat", parameters = "count=${action.count}", result = msg, isSuccess = true))
+                Triple(true, msg, msg)
+            }
+            is ToolActionRequest.SearchAndSummarizeWeb -> {
+                deviceController.openGoogleSearch(action.query)
+                val summary = if (action.openFirstResult) {
+                    delay(1500)
+                    deviceController.controlActiveApp("click_first_result")
+                    delay(1500)
+                    screenReadingManager.summarizeScreen(geminiAgent, action.query)
+                } else {
+                    val aiResp = geminiAgent.processCommand("User ne search kiya: '${action.query}'. Is topic ka ek simple aur concise 2-sentence Hindi/Hinglish summary do.")
+                    aiResp.responseText
+                }
+                dao.insertActionLog(ActionLogItem(toolName = "SearchAndSummarizeWeb", parameters = action.query, result = summary, isSuccess = true))
+                Triple(true, summary, summary)
+            }
+            is ToolActionRequest.OpenPdfDocument -> {
+                withContext(Dispatchers.Main) {
+                    _requestOpenPdfPicker.value = true
+                }
+                val msg = "PDF document choose karne ke liye file picker open kar diya hai."
+                Triple(true, msg, msg)
+            }
+            is ToolActionRequest.ReadPdf -> {
+                val doc = pdfReadingManager.currentDocInfo.value
+                if (doc == null) {
+                    withContext(Dispatchers.Main) {
+                        _requestOpenPdfPicker.value = true
+                    }
+                    val msg = "Sir, pehle ek PDF choose karein jise padhna hai. Document picker open ho gaya hai."
+                    Triple(false, msg, msg)
+                } else {
+                    val text = when (action.action) {
+                        "summary" -> pdfReadingManager.summarizeDocument(geminiAgent)
+                        "next" -> {
+                            val res = pdfReadingManager.readNextPage()
+                            res.getOrElse { "Error: ${it.message}" }
+                        }
+                        else -> {
+                            val targetPage = (action.pageNumber ?: pdfReadingManager.currentPage.value) - 1
+                            val res = pdfReadingManager.extractPageText(targetPage)
+                            res.getOrElse { "Error: ${it.message}" }
+                        }
+                    }
+                    dao.insertActionLog(ActionLogItem(toolName = "ReadPdf", parameters = "action=${action.action}, page=${action.pageNumber}", result = text, isSuccess = true))
+                    Triple(true, text, text)
+                }
+            }
+            is ToolActionRequest.ControlReading -> {
+                val msg = when (action.command.lowercase()) {
+                    "pause" -> screenReadingManager.pauseReading()
+                    "resume" -> screenReadingManager.resumeReading()
+                    "stop" -> screenReadingManager.stopReading()
+                    "repeat" -> screenReadingManager.repeatLastChunk()
+                    "next" -> screenReadingManager.nextChunk()
+                    "faster" -> screenReadingManager.adjustSpeed(true)
+                    "slower" -> screenReadingManager.adjustSpeed(false)
+                    else -> "Reading command: ${action.command}"
+                }
+                Triple(true, msg, msg)
+            }
+            is ToolActionRequest.OcrImageOrScreen -> {
+                val msg = screenReadingManager.extractScreenText()
+                Triple(true, msg, msg)
+            }
         }
     }
 
@@ -801,5 +954,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         speechRecognizerManager?.destroy()
         wakeWordEngine.stop()
         ttsManager.shutdown()
+        screenReadingManager.stopReading()
+        pdfReadingManager.closeCurrentPdf()
     }
 }

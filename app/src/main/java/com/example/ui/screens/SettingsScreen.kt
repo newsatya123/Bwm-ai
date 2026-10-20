@@ -117,6 +117,8 @@ fun SettingsScreen(
     val speechRate by viewModel.speechRate.collectAsState()
     val speechPitch by viewModel.speechPitch.collectAsState()
     val spokenConfirmation by viewModel.spokenConfirmation.collectAsState()
+    val isScreenReadingEnabled by viewModel.isScreenReadingEnabled.collectAsState()
+    val whatsappAutoReadOutLoud by viewModel.whatsappAutoReadOutLoud.collectAsState()
 
     var activeTab by remember(initialTab) {
         mutableStateOf(
@@ -647,9 +649,47 @@ fun SettingsScreen(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null, tint = RadiantEmerald)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("WhatsApp & App Automation", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                Text("WhatsApp & Screen Reading Automation", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                             }
                             Spacer(modifier = Modifier.height(8.dp))
+
+                            // Screen Reading Mode Toggle
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Screen Reading & Awareness Mode", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text("Allow assistant to read visible screen text, analyze web pages, and explain articles.", color = TextSecondary, fontSize = 11.sp)
+                                }
+                                Switch(
+                                    checked = isScreenReadingEnabled,
+                                    onCheckedChange = { viewModel.setScreenReadingEnabled(it) },
+                                    modifier = Modifier.testTag("screen_reading_switch")
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // WhatsApp Auto Read Out Loud Toggle
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("WhatsApp Voice Read Out Loud", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text("Speak last visible WhatsApp message aloud via Jarvis TTS when requested.", color = TextSecondary, fontSize = 11.sp)
+                                }
+                                Switch(
+                                    checked = whatsappAutoReadOutLoud,
+                                    onCheckedChange = { viewModel.setWhatsappAutoReadOutLoud(it) },
+                                    modifier = Modifier.testTag("whatsapp_read_switch")
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
 
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -705,7 +745,9 @@ fun SettingsScreen(
                             Text(
                                 text = "1. Zero Audio Upload: Continuous wake word runs 100% on-device using local RMS energy detection.\n\n" +
                                         "2. No Ambient Recording: Voice recognizer only starts after 'Hey BWM' trigger or manual orb tap.\n\n" +
-                                        "3. Verified Confirmation: Calling and WhatsApp messages require user confirmation before execution by default.",
+                                        "3. Screen Awareness Privacy: Screen reading operates purely on-demand via AccessibilityService / OCR when you issue a read or explain command. No background screenshots or continuous screen monitoring are stored.\n\n" +
+                                        "4. WhatsApp Message Privacy: Chat reading only inspects the active conversation that you explicitly asked for. It never bypasses encryption or reads background chats.\n\n" +
+                                        "5. Verified Confirmation: Calling and WhatsApp messages require user confirmation before execution by default.",
                                 color = TextSecondary,
                                 fontSize = 12.sp,
                                 lineHeight = 18.sp
@@ -725,11 +767,11 @@ fun SettingsScreen(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.Info, contentDescription = null, tint = NeonCyan)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("BWM AI Assistant v1.3.0", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                Text("BWM AI Assistant v1.5.0", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                             }
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = "Jarvis-inspired autonomous Android voice assistant with context-aware active app controls, WhatsApp messaging, contacts search, autonomous sequential multi-task queue, and zero-beep wake-word activation.",
+                                text = "Jarvis-inspired autonomous Android voice assistant with Screen Awareness, WhatsApp Chat Reading, Webpage Summaries, PDF Reading, on-device OCR, multi-task queue, and zero-beep wake-word activation.",
                                 color = TextSecondary,
                                 fontSize = 12.sp,
                                 lineHeight = 18.sp
