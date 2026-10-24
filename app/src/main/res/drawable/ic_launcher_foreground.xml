@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer energy ring -->
+    <path
+        android:pathData="M54,26 C69.46,26 82,38.54 82,54 C82,69.46 69.46,82 54,82 C38.54,82 26,69.46 26,54 C26,38.54 38.54,26 54,26 Z"
+        android:strokeWidth="3.5"
+        android:strokeColor="#00E5FF"
+        android:strokeLineCap="round" />
+    
+    <!-- Secondary violet arc ring -->
+    <path
+        android:pathData="M33,40 C38,32 46,28 54,28 C68,28 78,39 78,54 C78,65 71,74 61,78"
+        android:strokeWidth="3.0"
+        android:strokeColor="#9D4EDD"
+        android:strokeLineCap="round" />
+
+    <!-- Central Glowing Core Orb -->
+    <path
+        android:pathData="M54,54m-16,0a16,16 0 1,0 32,0a16,16 0 1,0 -32,0">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="40"
+                android:startY="40"
+                android:endX="68"
+                android:endY="68"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#00F5D4" />
+                <item android:offset="0.5" android:color="#00B4D8" />
+                <item android:offset="1.0" android:color="#7209B7" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Center Mic / Sound Waveform Glyph in White -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,42 C51.8,42 50,43.8 50,46 L50,54 C50,56.2 51.8,58 54,58 C56.2,58 58,56.2 58,54 L58,46 C58,43.8 56.2,42 54,42 Z" />
+    <path
+        android:pathData="M46,52 C46,56.4 49.6,60 54,60 C58.4,60 62,56.4 62,52"
+        android:strokeWidth="2.2"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M54,60 L54,65 M49,65 L59,65"
+        android:strokeWidth="2.2"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round" />
+</vector>

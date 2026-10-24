@@ -1,0 +1,6 @@
+{
+  "name": "BWM AI",
+  "description": "BWM AI is a voice-controlled native Android personal phone assistant with Gemini intelligence, app launching, voice recognition, and device controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
